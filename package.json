@@ -1,0 +1,37 @@
+{
+  "name": "mcs-a2ui-equipment-poc",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.9"
+  },
+  "scripts": {
+    "build": "npm run build:server && npm run build:client",
+    "build:client": "vite build",
+    "build:server": "tsc --project tsconfig.server.json",
+    "build:tests": "tsc --project tsconfig.tests.json",
+    "start": "node --env-file-if-exists=.env dist/server/server.js",
+    "test": "npm run build:tests && node --test dist-tests/tests/*.test.js",
+    "typecheck": "tsc --project tsconfig.server.json --noEmit && tsc --project tsconfig.client.json"
+  },
+  "dependencies": {
+    "@a2ui/markdown-it": "0.2.2",
+    "@a2ui/react": "0.14.0",
+    "@a2ui/web_core": "0.14.0",
+    "@azure/msal-node": "5.5.0",
+    "@microsoft/agents-activity": "1.10.1",
+    "@microsoft/agents-copilotstudio-client": "1.10.1",
+    "jsonc-parser": "3.3.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.6"
+  }
+}
