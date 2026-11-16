@@ -1,72 +1,78 @@
 import { getNodeValue, parseTree, type Node, type ParseError } from "jsonc-parser";
 import { z } from "zod";
 
-export const DEVICES = ["laptop", "monitor", "headset"] as const;
-export type Device = (typeof DEVICES)[number];
+export const SCENARIOS = ["brief", "policy", "credit", "desk"] as const;
+export type Scenario = (typeof SCENARIOS)[number];
 
-const requestIdSchema = z.string().uuid();
-const nonBlankText = (max: number) =>
-  z.string().min(1).max(max).refine((value) => value.trim().length > 0);
+const turnIdSchema = z.string().uuid();
+const boundedText = (max: number) =>
+  z.string().min(1).max(max).refine((value) => value.trim().length > 0, "Text must not be blank.");
 
-export const initialRequestSchema = z
+export const chatInputSchema = z
   .object({
-    userText: nonBlankText(1000),
+    text: boundedText(1000),
   })
   .strict();
 
-export const submitRequestSchema = z
-  .object({
-    requestId: requestIdSchema,
-    device: z.enum(DEVICES),
-    justification: nonBlankText(1000),
-  })
-  .strict();
+const contextValueSchema = z.union([
+  z.string().max(1000),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+  z.array(z.union([z.string().max(200), z.number().finite(), z.boolean()])).max(20),
+]);
 
-export const equipmentFormSchema = z
+export const actionInputSchema = z
   .object({
-    version: z.literal(1),
-    type: z.literal("equipment_form"),
-    requestId: requestIdSchema,
-    device: z.enum(DEVICES),
-    justification: nonBlankText(1000),
-  })
-  .strict();
-
-export const equipmentAckSchema = z
-  .object({
-    version: z.literal(1),
-    type: z.literal("equipment_ack"),
-    requestId: requestIdSchema,
-    submissionId: requestIdSchema,
-    status: z.literal("received_demo"),
-    device: z.enum(DEVICES),
-    justification: nonBlankText(1000),
-    message: nonBlankText(300),
-  })
-  .strict();
-
-export const equipmentErrorSchema = z
-  .object({
-    version: z.literal(1),
-    type: z.literal("equipment_error"),
-    requestId: z.string().max(64),
-    submissionId: z.string().max(64),
-    fieldErrors: z.record(z.string().min(1).max(64), z.string().min(1).max(300)),
+    actionId: z.string().uuid(),
+    surfaceId: z.string().max(64),
+    revision: z.number().int().min(1).max(10_000),
+    name: z.string().regex(/^[a-z][a-z0-9_]{1,40}$/),
+    context: z.record(z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,40}$/), contextValueSchema).default({}),
   })
   .strict()
-  .refine(
-    (error) =>
-      Object.keys(error.fieldErrors).every((field) =>
-        ["userText", "device", "justification"].includes(field),
-      ),
-    "Field errors must reference supported form fields.",
-  );
+  .refine((input) => Object.keys(input.context).length <= 20, "Too many context fields.");
 
-export type InitialRequest = z.infer<typeof initialRequestSchema>;
-export type SubmitRequest = z.infer<typeof submitRequestSchema>;
-export type EquipmentForm = z.infer<typeof equipmentFormSchema>;
-export type EquipmentAck = z.infer<typeof equipmentAckSchema>;
-export type EquipmentError = z.infer<typeof equipmentErrorSchema>;
+export const agentUiSchema = z
+  .object({
+    version: z.literal(2),
+    type: z.literal("ui"),
+    turnId: turnIdSchema,
+    scenario: z.enum(SCENARIOS),
+    skill: z.string().regex(/^[a-z][a-z0-9-]{1,60}$/),
+    text: z.string().max(500),
+    messages: z.array(z.record(z.unknown())).min(2).max(3),
+  })
+  .strict();
+
+export const agentTextSchema = z
+  .object({
+    version: z.literal(2),
+    type: z.literal("text"),
+    turnId: turnIdSchema,
+    text: boundedText(2000),
+  })
+  .strict();
+
+export const agentErrorSchema = z
+  .object({
+    version: z.literal(2),
+    type: z.literal("error"),
+    turnId: turnIdSchema,
+    message: boundedText(500),
+  })
+  .strict();
+
+export const agentResponseSchema = z.discriminatedUnion("type", [
+  agentUiSchema,
+  agentTextSchema,
+  agentErrorSchema,
+]);
+
+export type ChatInput = z.infer<typeof chatInputSchema>;
+export type ActionInput = z.infer<typeof actionInputSchema>;
+export type AgentUi = z.infer<typeof agentUiSchema>;
+export type AgentResponse = z.infer<typeof agentResponseSchema>;
 
 export class ContractError extends Error {
   constructor(

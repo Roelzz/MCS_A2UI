@@ -1,264 +1,308 @@
-# A custom UI for Microsoft Copilot Studio, powered by A2UI
+# Agent-built UI: Microsoft Copilot Studio + A2UI
 
-**Keep the agent in Copilot Studio. Own the user experience in your application.**
+**The agent decides what you see. Your app decides what is allowed.**
 
-This TypeScript sample demonstrates a custom React interface for Microsoft Copilot Studio (MCS), using the official [A2UI](https://a2ui.org/quickstart/) renderer and the Microsoft Agents **Direct-to-Engine (D2E)** client. The demo is called **Build your perfect desk**: describe what would make your workday better, and Copilot Studio recommends a desk upgrade that you can tweak in a live A2UI form and confirm in the same agent conversation.
+This TypeScript sample gives a Microsoft Copilot Studio (MCS) agent its own custom user interface. The agent doesn't reply with chat text. It replies with an **[A2UI](https://a2ui.org/quickstart/) v0.9 surface**: cards, tabs, sliders, date pickers, modals and buttons. A small Node backend calls the agent over **Direct-to-Engine (D2E)**, validates every surface strictly, and passes it to the **official A2UI React renderer**. When the user clicks something, the click goes back to the **same agent conversation**, and the agent answers with an updated surface.
 
-The purpose of sharing this sample is to make that integration pattern concrete: delegated sign-in, structured agent responses, a controlled UI contract, native A2UI interactions, and conversation continuity. It is a small, inspectable starting point for developers exploring an alternative to a chat-only interface.
+We are sharing this sample to show one pattern in practice. You keep the agent's logic in Copilot Studio, where makers can change it, and you own the screen. You do this without Direct Line, without an extra LLM, and without hand-coding a React form for each scenario.
 
-> **Important boundary:** the agent returns business JSON, not React code or an arbitrary A2UI layout. The backend validates that JSON and builds one allowlisted A2UI form. This is agent-grounded data in an application-controlled UI, not unrestricted generative UI.
+![Morning brief rendered from an agent-authored A2UI surface](docs/images/v2-morning-brief.png)
 
-## What the sample demonstrates
+## Why this matters
 
-| Capability | Implementation |
+| Question | Answer in this sample |
 | --- | --- |
-| Your own application experience | React shell, local API, sign-in, progress, errors, and diagnostics |
-| Genuine A2UI controls | Official renderer, basic catalog, data binding, and native action context |
-| Agent integration without another LLM | Microsoft Agents Copilot Studio client calling D2E directly |
-| Multi-turn continuity | Initial request and submission use one backend-held conversation ID |
-| Explicit application boundaries | Strict schemas, request ownership, correlation, and duplicate protection |
+| Who designs each screen? | The **agent**. Four Copilot Studio **skills** each hold one A2UI v0.9 template plus the state rules for it. |
+| Who decides what is allowed? | The **backend**. It applies per-scenario component allowlists, action-name rules, size and depth limits, and the official A2UI processor in strict mode. |
+| Who draws it? | The **official A2UI renderer** (`@a2ui/react`, Basic Catalog). The sample uses no custom components. |
+| How do clicks reach the agent? | Native A2UI actions are sent to the **same D2E conversation** as a versioned JSON envelope. |
+| What happens to the real world? | **Nothing.** All data is fictional. The agent has no tools, connectors, WorkIQ or knowledge sources. |
 
-There is no Direct Line, A2A server, AG-UI layer, Python service, or additional model service in this application.
+## The four scenarios
 
-## The experience
+The scenarios run in the order **P → O → D**: a quick win first, then the clearest contrast, then the control story. The desk scenario is a bonus.
 
-1. Select **Sign in with Microsoft**. The same tab goes to Microsoft and returns to the demo.
-2. Pick a starter (**Build and code**, **More room to think**, **Meet without distractions**) or type your own sentence, then select **Find my desk upgrade**.
-3. Copilot Studio, using its `desk-setup-a2ui` skill, returns a recommended device (laptop, monitor or headset) and a reason. The backend validates that business JSON and sends an A2UI surface to the browser.
-4. Make it yours. Switching the device in the A2UI choice picker instantly updates the preview title, benefit and detail through native A2UI data binding, with no agent round trip. Edit the reason too.
-5. Select **Confirm my demo setup** once. The same conversation returns a receipt echoing your exact edits, plus:
+```mermaid
+flowchart LR
+    P["⚡ P · Morning brief<br/><i>speed</i>"]:::p --> O["💬 O · Policy → request<br/><i>chatbot vs agent</i>"]:::o --> D["🛡️ D · Credit case file<br/><i>human control</i>"]:::d
+    D -.-> X["🖥️ Bonus · Desk setup"]:::x
 
-   **"Demo request received — nothing was purchased or submitted."**
+    classDef p fill:#fde68a,stroke:#b45309,color:#78350f,stroke-width:2px
+    classDef o fill:#a7f3d0,stroke:#047857,color:#064e3b,stroke-width:2px
+    classDef d fill:#fbcfe8,stroke:#be185d,color:#831843,stroke-width:2px
+    classDef x fill:#bfdbfe,stroke:#1d4ed8,color:#1e3a8a,stroke-dasharray:4 3
+```
 
-6. Select **Try another setup** for a fresh agent conversation without signing in again. Reloading mid-flow restores the current step without sending a new agent turn.
+### P · Executive morning brief: *"What needs me today?"*
 
-**Screenshots:** pending; they will be captured from the real application, not staged responses.
+The agent ranks five items by urgency. A Divider separates **Needs a decision** from **For your information**. Each card has Approve, Delegate or Snooze. Delegate opens a Modal for a short note, and the list gets shorter after every action.
+
+| Ranked brief | Delegate with a note | The list shrinks |
+| --- | --- | --- |
+| ![Brief](docs/images/v2-morning-brief.png) | ![Delegate modal](docs/images/v2-brief-delegate-modal.png) | ![After delegate](docs/images/v2-brief-after-delegate.png) |
+
+*Skill:* `morning-brief-a2ui` · *Components:* Column, Card, List, Row, Text, Icon, Button, Divider, Modal, TextField
+
+### O · Policy answer that becomes a request: *"Can I work from Lisbon for six weeks?"*
+
+The agent gives a short answer and shows eligibility checks with tick icons. It cites the (fictional) policy and prefills a request with the dates and the manager. When the user moves the end date to seven weeks and selects **Re-check eligibility**, the agent flips one check to a cross and explains why. The agent also refuses to submit dates that break the policy.
+
+| Answer + prefilled request | Seven weeks: one check flips |
+| --- | --- |
+| ![Policy](docs/images/v2-policy.png) | ![Recheck](docs/images/v2-policy-recheck.png) |
+
+*Skill:* `policy-request-a2ui` · *Components:* Card, List, Icon, Text, DateTimeInput, TextField, Button, Divider
+
+### D · Credit limit case file: *"Open the credit limit request for Northwind"*
+
+The surface opens with a customer header and Tabs for Financials, Payment history and Recent news. A **slider** sets the proposed limit, and the agent's recommendation is shown in text. Below it are Approve, Reject and Escalate. Each decision opens a **Modal** that requires a reason before anything goes back to the agent. The receipt records whether the analyst went below the agent's number.
+
+| Case file | Decision needs a reason | Receipt |
+| --- | --- | --- |
+| ![Credit case](docs/images/v2-credit-case.png) | ![Modal](docs/images/v2-credit-modal.png) | ![Receipt](docs/images/v2-credit-receipt.png) |
+
+*Skill:* `credit-case-a2ui` · *Components:* Card, Tabs, Column, Row, List, Text, Icon, Slider, Button, Modal, TextField, Divider
+
+The human decision point is a designed control, not a sentence such as "reply yes to confirm".
+
+### Bonus · Desk setup: *"I need a laptop for local development"*
+
+The agent proposes a device. The user switches the ChoicePicker (laptop, monitor or headset) and edits the reason. The receipt repeats the edited values and ends with *"Demo request received — nothing was purchased or submitted."*
+
+*Skill:* `desk-setup-a2ui` · *Components:* Card, ChoicePicker, Icon, Text, TextField, Button
 
 ## Architecture
 
-One Node.js process serves the built React application and its API at **`http://localhost:2009`**. Vite builds the client; there is no separate frontend server at runtime.
+One Node.js process serves the built React app and its API at **`http://localhost:2009`**. Vite builds the client once. The sample runs no second frontend server.
 
 ```mermaid
 flowchart TB
-    User["User"]:::person
-    Entra["Microsoft Entra ID<br/>Delegated sign-in and consent"]:::identity
-    MCS["Microsoft Copilot Studio<br/>Published agent + desk-setup-a2ui skill"]:::agent
+    User(["👤 User"]):::person
 
-    subgraph Local["Local application - localhost:2009"]
+    subgraph Browser["🌐 Browser · localhost:2009"]
         direction TB
-        subgraph Browser["Browser"]
-            Shell["Custom React shell<br/>Request, status, acknowledgement"]:::ui
-            Renderer["Official A2UI renderer<br/>Bound controls and native actions"]:::ui
-        end
-        subgraph Node["Node.js backend - trust and validation boundary"]
-            API["HTTP API and MSAL PKCE<br/>Host and origin checks"]:::server
-            Contract["Business contract validation<br/>Allowlisted A2UI mapping"]:::validation
-            SDK["Microsoft Agents D2E client"]:::server
-            State["In-memory sessions<br/>Tokens, conversation ID, correlation"]:::state
-        end
+        Shell["React chat shell<br/>turns · status · Under the hood"]:::ui
+        Renderer["Official A2UI renderer<br/>@a2ui/react · Basic Catalog"]:::ui
     end
 
+    subgraph Node["🛡️ Node backend · trust boundary"]
+        direction TB
+        API["HTTP API + MSAL PKCE<br/>origin checks · HttpOnly cookie"]:::server
+        Chat["Chat service<br/>turnIds · one correction max · no retries"]:::server
+        Validator["A2UI validator<br/>allowlists · action rules · strict processor"]:::validation
+        State[("In-memory session<br/>tokens · conversationId · surfaces")]:::state
+        SDK["@microsoft/agents-copilotstudio-client<br/>Direct-to-Engine"]:::server
+    end
+
+    subgraph MCS["🤖 Copilot Studio agent · no tools"]
+        direction TB
+        Router{{"Router instructions"}}:::router
+        S1["morning-brief-a2ui"]:::p
+        S2["policy-request-a2ui"]:::o
+        S3["credit-case-a2ui"]:::d
+        S4["desk-setup-a2ui"]:::x
+    end
+
+    Entra["🔐 Microsoft Entra ID<br/>delegated CopilotStudio.Copilots.Invoke"]:::identity
+
     User --> Shell
-    Shell -->|"Same-origin API + opaque cookie"| API
-    API <-->|"Authorization code + PKCE"| Entra
-    API <--> Contract
-    Contract <--> SDK
-    API --- State
-    Contract --- State
-    SDK <-->|"Delegated invocation / business JSON"| MCS
-    Contract -->|"Validated A2UI messages via API"| Renderer
-    Renderer -->|"Edited action context via API"| API
+    Shell <-->|"same-origin JSON"| API
+    Renderer -->|"native A2UI action"| API
+    API <-->|"auth code + PKCE"| Entra
+    API --> Chat --> SDK
+    SDK <-->|"v2 JSON envelope in message text"| Router
+    Router --> S1 & S2 & S3 & S4
+    Chat --> Validator
+    Chat --- State
+    Validator -->|"validated A2UI messages"| Renderer
 
     classDef person fill:#fef3c7,stroke:#b45309,color:#78350f
-    classDef identity fill:#fce7f3,stroke:#be185d,color:#831843
-    classDef agent fill:#ede9fe,stroke:#7c3aed,color:#4c1d95
     classDef ui fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
     classDef server fill:#cffafe,stroke:#0891b2,color:#164e63
-    classDef validation fill:#d1fae5,stroke:#059669,color:#064e3b
+    classDef validation fill:#d1fae5,stroke:#059669,color:#064e3b,stroke-width:2px
     classDef state fill:#ffedd5,stroke:#ea580c,color:#7c2d12
-    style Local fill:#f8fafc,stroke:#64748b,color:#0f172a
+    classDef identity fill:#fce7f3,stroke:#be185d,color:#831843
+    classDef router fill:#ede9fe,stroke:#7c3aed,color:#4c1d95,stroke-width:2px
+    classDef p fill:#fde68a,stroke:#b45309,color:#78350f
+    classDef o fill:#a7f3d0,stroke:#047857,color:#064e3b
+    classDef d fill:#fbcfe8,stroke:#be185d,color:#831843
+    classDef x fill:#bfdbfe,stroke:#1d4ed8,color:#1e3a8a
     style Browser fill:#eff6ff,stroke:#93c5fd,color:#1e3a8a
     style Node fill:#f0fdfa,stroke:#5eead4,color:#134e4a
+    style MCS fill:#f5f3ff,stroke:#c4b5fd,color:#4c1d95
 ```
 
 ### Three responsibilities, deliberately separated
 
-**Copilot Studio interprets the request.** The agent uses the **GitHub Copilot harness** (`cliagent-1.0.0`), with no topics or global variables. Its global instructions are a short router; the versioned protocol lives in the runtime skill **`desk-setup-a2ui`**. The skill infers supported business values and acknowledges submissions. Do not treat this configuration as a classic topic-based agent template.
+**Copilot Studio authors the UI.** The agent uses the **GitHub Copilot harness** (`cliagent-1.0.0`) with no topics and no global variables. Its global instructions are a short router. Each scenario is a runtime **skill** (`behaviors/<name>/SKILL.md`). A skill holds the A2UI template, the fictional data, and the rules for each action, such as "Delegate removes the item and records the note". Each skill's description says exactly when the orchestrator should load it.
 
-**The backend owns the contract and the UI definition.** It checks agent output, constructs the A2UI component tree, initializes the data model, and retains conversation/session state. An agent response cannot introduce scripts, new controls, arbitrary actions, or external business operations.
+**The backend decides what is allowed.** It never builds UI. It accepts an agent surface only if every check passes:
 
-**React hosts the official A2UI renderer.** The surrounding page is ordinary React. The equipment selector, justification field, and submit action are rendered from A2UI messages using `MessageProcessor`, `A2uiSurface`, and the official basic catalog. Editing updates the native data model; submission resolves bound values into the action context.
+- The surface uses `createSurface` + `updateComponents` + optional `updateDataModel`, and every message targets one surface ID that starts with the scenario prefix (`brief-`, `policy-`, `credit-`, `desk-`).
+- The Basic Catalog is used, and every component is on that **scenario's allowlist**. For example, only `credit` may use Tabs.
+- Button actions are server events named `<scenario>_<verb>`, or local `open_*` events with no context. Function calls are not allowed.
+- No string contains script, HTML or URL schemes. The surface stays within 120 components, a tree depth of 10, 500 characters per string and a 16 KB data model.
+- The **official `MessageProcessor` in strict v0.9 mode** must accept it.
 
-### The agent skill: when it is used
+**React hosts the official renderer.** The chat shell is ordinary React. Every interactive surface is rendered by `@a2ui/react` from validated messages. Data binding, Modals, Tabs and Sliders are native renderer behaviour. The **Under the hood** panel shows the raw A2UI messages and the correlation for each turn.
 
-The skill is the part of the agent that knows the A2UI demo contract. Its description tells the orchestrator exactly when to load it:
-
-> Use when a user message is a version-1 JSON envelope of type `equipment_request` or `equipment_submit` from the "Build your perfect desk" demo app, including one exact retry of that same envelope. Returns only the business JSON (`equipment_form`, `equipment_ack` or `equipment_error`) that the app validates and renders as an A2UI form. Do not use for ordinary chat, other UI requests, or anything that would buy, submit, provision or change records.
+### Routing to the right skill
 
 ```mermaid
 flowchart LR
-    Msg["Incoming D2E message"]:::input --> Router{"Router instructions<br/>v1 desk envelope?"}:::router
-    Router -->|"equipment_request /<br/>equipment_submit"| Skill["desk-setup-a2ui skill<br/>business JSON only"]:::skill
-    Router -->|"anything else"| Refuse["Brief reply:<br/>desk demo only"]:::refuse
-    Skill --> Out["equipment_form / equipment_ack /<br/>equipment_error"]:::output
-    Out --> App["Backend validation<br/>→ allowlisted A2UI"]:::app
+    In["📨 v2 envelope"]:::input --> T{"type?"}:::router
+    T -->|hello| W["text: welcome +<br/>4 demo prompts"]:::text
+    T -->|chat| I{"intent"}:::router
+    T -->|ui_action| Pfx{"surfaceId prefix"}:::router
+    T -->|correction| Same["same skill as<br/>the rejected turn"]:::text
+    I -->|"what needs me today"| P["morning-brief-a2ui"]:::p
+    I -->|"work abroad / policy"| O["policy-request-a2ui"]:::o
+    I -->|"credit limit / case"| D["credit-case-a2ui"]:::d
+    I -->|"laptop / monitor / desk"| X["desk-setup-a2ui"]:::x
+    I -->|anything else| F["text: point to<br/>the demo prompts"]:::text
+    Pfx -->|brief-| P
+    Pfx -->|policy-| O
+    Pfx -->|credit-| D
+    Pfx -->|desk-| X
 
     classDef input fill:#fef3c7,stroke:#b45309,color:#78350f
     classDef router fill:#ede9fe,stroke:#7c3aed,color:#4c1d95
-    classDef skill fill:#fce7f3,stroke:#be185d,color:#831843
-    classDef refuse fill:#f1f5f9,stroke:#64748b,color:#0f172a
-    classDef output fill:#d1fae5,stroke:#059669,color:#064e3b
-    classDef app fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef text fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    classDef p fill:#fde68a,stroke:#b45309,color:#78350f
+    classDef o fill:#a7f3d0,stroke:#047857,color:#064e3b
+    classDef d fill:#fbcfe8,stroke:#be185d,color:#831843
+    classDef x fill:#bfdbfe,stroke:#1d4ed8,color:#1e3a8a
 ```
 
-The skill never emits A2UI or UI markup: the app owns every component. That keeps the agent swappable and the UI safe.
+The skill descriptions follow the same rule. For example, `credit-case-a2ui`:
 
-### The request-to-acknowledgement round trip
+> Use when the user asks to review, open or decide a credit limit increase or credit case for a customer (e.g. "open the credit case for Northwind", "sales wants a higher credit limit"), or when a JSON envelope is a ui_action or correction for a surfaceId starting with credit-. Returns an agent-authored A2UI v0.9 case file with tabs, a limit slider and human decision controls. Fictional data; never changes a credit system.
+
+### One click, one round trip
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User
-    participant UI as React + A2UI
-    participant API as Node backend
-    participant Agent as Copilot Studio D2E
+    actor U as Analyst
+    participant R as A2UI renderer
+    participant B as Node backend
+    participant A as Copilot Studio (D2E)
 
-    rect rgb(239, 246, 255)
-        Note over UI,Agent: Initial request - start one conversation
-        User->>UI: Describe a laptop request
-        UI->>API: POST /api/equipment/request
-        API->>Agent: Start conversation
-        Agent-->>API: Conversation ID (backend only)
-        API->>Agent: equipment_request + requestId + contextMarker
-        Agent-->>API: equipment_form business JSON
-        API->>API: Validate schema and correlation
-        API-->>UI: createSurface + updateComponents + updateDataModel
+    rect rgb(254, 243, 199)
+        Note over U,A: Chat turn: the agent authors the surface
+        U->>R: "Open the credit limit request for Northwind"
+        R->>B: POST /api/chat
+        B->>A: {version:2, type:"chat", turnId, text}
+        A-->>B: {type:"ui", skill:"credit-case-a2ui", messages:[…]}
+        B->>B: validate (allowlist · actions · strict processor)
+        B-->>R: credit-case rev 1
     end
 
-    rect rgb(240, 253, 244)
-        Note over User,UI: Official A2UI data binding and action
-        User->>UI: Select monitor and edit justification
-        User->>UI: Submit demo request
-        UI->>API: POST /api/equipment/submit with bound values
+    rect rgb(252, 231, 243)
+        Note over U,R: Native A2UI interaction, no agent call
+        U->>R: Slider → 200,000 · Approve… opens Modal
+        U->>R: Enter reason · Confirm decision
     end
 
-    rect rgb(250, 245, 255)
-        Note over API,Agent: Same conversation - no contextMarker in submission
-        API->>API: Validate ownership, values, and duplicate state
-        API->>Agent: equipment_submit + requestId + submissionId
-        Agent-->>API: equipment_ack + exact values + recalled marker
-        API->>API: Check IDs, edited values, and original context
-        API-->>UI: Validated acknowledgement
-        UI-->>User: Demo confirmation and workflow completed
+    rect rgb(209, 250, 229)
+        Note over R,A: Action turn in the same conversation
+        R->>B: POST /api/action {surfaceId, revision, credit_decide, context}
+        B->>B: action offered on this revision? lock revision
+        B->>A: {type:"ui_action", surfaceId, name, context, turnId}
+        A-->>B: receipt surface (rev 3) + credit_reopen
+        B-->>R: "Approved: EUR 200,000 · below recommendation · Demo only"
     end
 ```
 
-The context marker is a small continuity check: the backend supplies it only in the first turn and requires its exact recall in the acknowledgement. It is not an authentication credential.
+## The v2 contract
 
-## Business JSON is not the A2UI protocol
+Envelopes travel as plain JSON in ordinary D2E **message text**. The sample doesn't rely on `channelData`, attachments or events.
 
-The agent exchanges version-1 JSON envelopes in **ordinary message text**. For example, a valid form response looks like this:
+| Direction | `type` | Fields beyond `version: 2` and `turnId` |
+| --- | --- | --- |
+| App → agent | `hello` | none |
+| App → agent | `chat` | `text` (bounded) |
+| App → agent | `ui_action` | `surfaceId`, `name`, `context` |
+| App → agent | `correction` | `problem` with the validator's short reason |
+| Agent → app | `ui` | `scenario`, `skill`, `text`, `messages` (A2UI v0.9) |
+| Agent → app | `text` / `error` | `text` |
 
-```json
-{
-  "version": 1,
-  "type": "equipment_form",
-  "requestId": "123e4567-e89b-42d3-a456-426614174000",
-  "device": "laptop",
-  "justification": "Run local development tools."
-}
-```
+Rules the backend enforces:
 
-The backend maps this into three **A2UI v0.9** messages:
+- The agent must return exactly one JSON object of at most 64 KB that echoes the `turnId`. Duplicate JSON keys are rejected.
+- If the reply is invalid, the backend sends **at most one correction**. After that the turn fails visibly, and the backend never falls back to a server-made UI.
+- Actions are accepted only for the **latest revision** of a surface, and only for an action name **that revision actually offered**. The revision is locked before sending, so a slow or uncertain turn can't be clicked twice.
+- Turns are serialized per session. A timeout (90 s) is **not retried**.
 
-| Message | Responsibility |
-| --- | --- |
-| `createSurface` | Create the equipment surface using the official basic catalog |
-| `updateComponents` | Define the fixed card, text, choice picker, text field, and button |
-| `updateDataModel` | Bind the validated device selection and justification |
+`skill` is self-reported by the agent. It is useful for diagnostics but is not proof of skill invocation (see [Evidence](#evidence)).
 
-The button emits `equipment_submit` with `/deviceSelection` and `/justification` resolved from that data model. The client sends those values to the backend; the backend creates the correlated submission envelope.
-
-| Business envelope | Fields beyond `version` and `type` |
-| --- | --- |
-| `equipment_request` | `requestId`, `contextMarker`, `userText` |
-| `equipment_form` | `requestId`, `device`, `justification` |
-| `equipment_submit` | `requestId`, `submissionId`, `device`, `justification` |
-| `equipment_ack` | `requestId`, `submissionId`, `status`, `device`, `justification`, `message` |
-| `equipment_error` | `requestId`, `submissionId`, bounded `fieldErrors` |
-
-Only `laptop`, `monitor`, and `headset` are supported. The schemas bound input sizes, reject unknown properties and blank values, and parse JSON without allowing duplicate keys. The D2E adapter requires exactly one plain-text message, rejects attachments, and ignores typing/trace/event metadata rather than treating it as business data.
-
-## Source map and technology
+## Source map
 
 | Location | Responsibility |
 | --- | --- |
-| [`src/client/main.tsx`](src/client/main.tsx) | React shell, official renderer lifecycle, action handling, restore/reset, API calls |
-| [`src/client/desk-model.ts`](src/client/desk-model.ts) | Live device preview through an official A2UI `DataModel` subscription |
-| [`src/server/server.ts`](src/server/server.ts) | Single-origin HTTP server, API routes, static client, cookie/origin controls |
+| [`src/client/main.tsx`](src/client/main.tsx) | Chat shell, official renderer per surface, action dispatch, Under the hood |
+| [`src/server/server.ts`](src/server/server.ts) | Single-origin server: `/api/chat`, `/api/action`, `/api/conversation*`, `/api/reset`, auth routes, static client |
+| [`src/server/chat-service.ts`](src/server/chat-service.ts) | Turn lifecycle, v2 envelopes, correction policy, revision and action checks |
+| [`src/server/a2ui-validator.ts`](src/server/a2ui-validator.ts) | Allowlists, action rules, limits and the strict official processor |
+| [`src/server/contracts.ts`](src/server/contracts.ts) | Zod schemas for the v2 envelopes and API input |
+| [`src/server/d2e.ts`](src/server/d2e.ts) | Copilot Studio client: one plain-text reply per turn; ignores typing/trace/event activities |
 | [`src/server/auth.ts`](src/server/auth.ts) | MSAL authorization-code flow with PKCE |
-| [`src/server/d2e.ts`](src/server/d2e.ts) | Official Copilot Studio client and response-activity handling |
-| [`src/server/contracts.ts`](src/server/contracts.ts) | Strict business envelopes and input validation |
-| [`src/server/a2ui.ts`](src/server/a2ui.ts) | Allowlisted A2UI component tree and bound initial data |
-| [`src/server/equipment-service.ts`](src/server/equipment-service.ts) | Conversation lifecycle, validation, correlation, and duplicate protection |
-| [`src/server/session-store.ts`](src/server/session-store.ts) | In-memory session/workflow state and serialized operations |
-| [`agent/MCS_A2UI_GH_CLEAN/settings.mcs.yml`](agent/MCS_A2UI_GH_CLEAN/settings.mcs.yml) | GitHub-harness configuration and short router instructions |
-| [`agent/MCS_A2UI_GH_CLEAN/behaviors/desk-setup-a2ui/SKILL.md`](agent/MCS_A2UI_GH_CLEAN/behaviors/desk-setup-a2ui/SKILL.md) | Runtime agent skill with the versioned business-JSON protocol |
-| [`tests/demo.test.ts`](tests/demo.test.ts) | Contract, renderer-model, transport, and workflow regression tests |
+| [`src/server/session-store.ts`](src/server/session-store.ts) | In-memory sessions and serialized operations |
+| [`agent/MCS_A2UI_GH_CLEAN/settings.mcs.yml`](agent/MCS_A2UI_GH_CLEAN/settings.mcs.yml) | Harness configuration and router instructions |
+| [`agent/MCS_A2UI_GH_CLEAN/behaviors/`](agent/MCS_A2UI_GH_CLEAN/behaviors/) | The four skills (`SKILL.md` + `skill.mcs.yml`) |
+| [`tests/demo.test.ts`](tests/demo.test.ts) | Validator, parser, D2E adapter and conversation-flow tests |
 
-The lockfile pins `@a2ui/react` and `@a2ui/web_core` to **0.14.0**, using their **`v0_9` entry points**, and `@microsoft/agents-copilotstudio-client` to **1.10.1**. Package versions and A2UI wire-protocol versions are different; upgrade the renderer/core together and verify the protocol before changing either.
+Pinned versions: `@a2ui/react` and `@a2ui/web_core` **0.14.0** (A2UI wire protocol **v0.9** via the `v0_9` entry points), `@microsoft/agents-copilotstudio-client` **1.10.1**, `@fontsource/material-icons` **5.3.0** (the renderer emits Material Icons ligatures; the host must supply the font). Package versions and protocol versions are different things, so upgrade the renderer and core together.
 
 ## Run the sample
 
 ### Prerequisites
 
-- Node.js **22.9+** and npm; the verified runtime was Node 22.23.1.
-- Access to a published Copilot Studio agent supporting delegated D2E invocation.
-- A suitable Entra public-client registration in your tenant, with a service principal and delegated **`CopilotStudio.Copilots.Invoke`** permission on the **Power Platform API**.
-- Consent and permission to invoke that agent. Tenant policy may require administrator approval.
+- Node.js **22.9+** (verified on 22.23.1) and npm.
+- A published Copilot Studio agent that supports delegated D2E invocation.
+- An Entra public-client registration in your tenant, with delegated **`CopilotStudio.Copilots.Invoke`** on the **Power Platform API**. Your tenant policy may require admin consent.
 
 ### Configure the agent
 
-The agent needs two things, both in [`agent/MCS_A2UI_GH_CLEAN/`](agent/MCS_A2UI_GH_CLEAN/):
+Everything lives in [`agent/MCS_A2UI_GH_CLEAN/`](agent/MCS_A2UI_GH_CLEAN/):
 
-1. **The skill** [`behaviors/desk-setup-a2ui/SKILL.md`](agent/MCS_A2UI_GH_CLEAN/behaviors/desk-setup-a2ui/SKILL.md) (component metadata in `skill.mcs.yml`). In the portal: **Skills → Add skill → Upload a skill**.
-2. **The router instructions** at `configuration.agentSettings.instructions.segments[0].value` in [`settings.mcs.yml`](agent/MCS_A2UI_GH_CLEAN/settings.mcs.yml).
+1. **Four skills** in `behaviors/*/SKILL.md`, each with `skill.mcs.yml` (`kind: InlineAgentSkill`).
+2. **Router instructions** at `configuration.agentSettings.instructions.segments[0].value` in `settings.mcs.yml`.
 
-The sample agent was updated with the Power Platform CLI on a sync-connected workspace, then verified with a fresh clone before publishing:
+The sample agent was updated with the Power Platform CLI on a sync-connected clone. A fresh clone confirmed the changes before publishing:
 
 ```sh
 pac copilot clone --bot <agent-id> --environment <dataverse-url> --output-dir <dir>
-# add behaviors/<skill>.mcs.yml (kind: InlineAgentSkill) and edit the instructions
-pac copilot pull --project-dir <dir>/<agent>
+# add behaviors/<skill>/ and edit the router instructions
 pac copilot push --project-dir <dir>/<agent>
 pac copilot publish --bot <agent-id> --environment <dataverse-url>
 ```
 
-The demo requires an agent without write tools: verify that write-capable IQ capabilities and WorkIQ are absent and default WorkIQ inclusion is disabled. Preserve unrelated configuration and feedback when adapting an existing agent. Do not blindly push the sample's connected workspace into another agent.
+The agent must have **no write tools**. Check that WorkIQ and IQ capabilities are absent, and that default WorkIQ inclusion is disabled. Keep unrelated configuration when you adapt an existing agent. Don't blindly push this workspace into another agent. The skills were tested only with this harness, so any other harness must be verified separately.
 
-This harness was tested with this skill and router. Another harness or agent must be configured and verified separately; copying the files is not proof of D2E compatibility or published behavior.
+To change a screen, edit the template in that skill's `SKILL.md`, then push and publish. The app doesn't need a change unless a new component type or action name falls outside the validator's allowlist. In that case, update the allowlist and add a test.
 
 ### Configure Entra and local settings
 
-Register **`http://localhost:2009/auth/callback`** as the public-client redirect URI. No client secret is needed. Grant the delegated Power Platform permission above and obtain the consent required by your tenant.
+Register **`http://localhost:2009/auth/callback`** as the public-client redirect URI. No client secret is needed.
 
 ```sh
 cp .env.example .env
 ```
 
-Edit the private `.env` before starting. **The checked-in example contains the original sample deployment's identifiers; they do not grant access. Replace them with your own values.**
+The checked-in example contains the original sample deployment's identifiers. They do not grant access, so replace them with your own values.
 
 | Variable | Value |
 | --- | --- |
 | `MCS_TENANT_ID` | Your Entra tenant ID |
 | `MCS_AGENT_ENVIRONMENT_ID` | Your Copilot Studio environment ID |
-| `MCS_AGENT_SCHEMA_NAME` | Your agent's schema name, not its display name or GUID |
+| `MCS_AGENT_SCHEMA_NAME` | The agent's schema name, not its display name or GUID |
 | `ENTRA_CLIENT_ID` | Your public-client application ID |
-| `AUTHORITY_URL` | `https://login.microsoftonline.com` (public cloud only) |
-| `MCS_AGENT_READY` | Keep `false` until the published agent is verified safe; then set `true` |
+| `AUTHORITY_URL` | `https://login.microsoftonline.com` (public cloud) |
+| `MCS_AGENT_READY` | Keep `false` until the published agent is verified safe, then set it to `true` |
 | `LOG_LEVEL` | `INFO` by default |
 
-The SDK derives the Power Platform scope from the connection settings. An Azure CLI token or a Copilot Studio portal login is not a substitute for application delegated sign-in.
+An Azure CLI token or a Copilot Studio portal login is not a substitute for application delegated sign-in.
 
 ### Build and start
 
@@ -270,49 +314,53 @@ npm run build
 npm start
 ```
 
-Open **[http://localhost:2009](http://localhost:2009)** in your chosen browser. The listener binds to `127.0.0.1`, but the application requires the hostname `localhost`. No additional frontend port is used.
+Open **[http://localhost:2009](http://localhost:2009)** in the browser of your choice and select **Sign in**. Use the hostname `localhost`, because `127.0.0.1` is rejected. Complete sign-in in the same browser session. A server restart clears all sessions, and changes to `.env` require a restart.
 
-Open `http://localhost:2009` in the browser of your choice and select **Sign in with Microsoft**; the same tab goes to Microsoft and returns to the demo. Complete sign-in in the **same browser session**: an embedded preview and an external browser do not share cookies. Sign-in is available while agent readiness is false; equipment calls remain gated until it is true. Changes to `.env` require a server restart.
+## Authentication, safety and limits
 
-## Authentication, safety, and limits
+- Access tokens and the D2E conversation ID stay in backend memory. The browser gets only an opaque `HttpOnly`, `SameSite=Lax` cookie. PKCE and state checks protect sign-in, POSTs require the expected origin, and sessions expire after 30 minutes of inactivity.
+- **No business writes.** No tickets, approvals, credit changes, HR requests, purchases or Dataverse records are created. Every receipt says so explicitly.
+- The agent's output is instruction following, **not constrained decoding**. Validation is what makes it safe to render: a malformed or out-of-contract surface becomes a visible error, never a fallback UI.
+- The one-correction policy suits this no-effect demo. It is not an exactly-once strategy for agents that have side effects.
+- The router forbids web search, but the portal's web-search toggle is still on, so this is an instruction-level control, not a hard one.
+- This is a local POC. Production use needs an HTTPS hosting and auth design, persistent session handling, monitoring, and an independent review of agent permissions.
 
-Access tokens and D2E conversation IDs stay in backend memory. The browser receives only an opaque `HttpOnly`, `SameSite=Lax` session cookie, not a bearer token. PKCE and state checking protect sign-in; API POSTs require the expected origin. Sessions expire after 30 minutes of inactivity, and a server restart clears all in-memory authentication and workflow state.
+## Evidence
 
-This sample has **no business-write integration**: no tickets, inventory, approvals, purchases, or Dataverse records are created. Its acknowledgement explicitly describes a simulation.
+**Automated** (`npm test`, 9 tests). The tests cover:
 
-The backend serializes operations per session, validates request ownership and response correlation, disables duplicate submission in the UI, and deduplicates completed submissions server-side. It may send **one exact-envelope correction** after receiving invalid business output. This is appropriate only for this no-effect demo contract, not a general retry strategy for side-effecting agents. Timeouts and transport failures are never blindly retried; uncertain outcomes lock the workflow.
+- strict JSON parsing (duplicate keys, oversize payloads)
+- the D2E multi-activity adapter
+- that **every SKILL.md template passes the strict validator**
+- rejection of unsafe surfaces
+- `turnId` echo
+- actions returning to the same conversation
+- the one-correction-then-fail rule
+- no retry after a timeout
+- bounded chat input
 
-The agent's output remains best-effort natural-language instruction following, **not constrained decoding**. Malformed or mismatched output produces an explicit error, never a success fallback.
+`npm run typecheck` and `npm run build` also pass.
 
-This is a local POC, not a production hosting template. Production work would need an HTTPS deployment/authentication design, suitable persistent session/token handling, scaling and lifecycle decisions, operational monitoring, and independent verification of agent permissions and effects.
+**Live, 2026-11-16.** A user signed in with real delegated auth against the published agent, with no fixtures. All four scenarios worked end to end in one conversation:
 
-## Adapt the pattern
+| Scenario | Verified interaction |
+| --- | --- |
+| P | Approve, Delegate (Modal + note) and Snooze all worked; the list shrank on every revision |
+| O | Re-check at 49 days flipped the duration check to a cross; submitting 49 days was refused; 42 days gave a receipt |
+| D | 51-component case file; slider to 200,000 → Approve Modal; Confirm stayed disabled until a reason was entered; the receipt flagged "below the agent recommendation" |
+| Desk | Switched to Monitor, edited the reason, and the receipt repeated both with "nothing was purchased or submitted" |
 
-Start with your business contract, not an arbitrary component generator. Extend the schemas in `contracts.ts`, keep the agent instructions aligned, and map validated values to an allowlisted surface in `a2ui.ts`. Register native action names explicitly in the client and validate them again server-side.
-
-To add a new device or a different workflow, update the contract, component options, agent behavior, service checks, and focused tests together. Introducing tools or real writes changes the safety model: the current correction and duplicate policies are not an exactly-once transaction guarantee.
-
-## Validation and troubleshooting
-
-**Automated:** the 12 tests cover strict JSON/schema handling, official A2UI processing/data binding, the live device preview, reset/restore isolation, D2E multi-activity responses, edited values in one conversation, context recall, session isolation, duplicate suppression, invalid inputs, and uncertain timeouts. `npm run typecheck` checks both client and server; `npm run build` produces the single-process application.
-
-**Live:** user-driven browser acceptance passed on 2026-11-13 against the supplied published agent with real delegated sign-in and no fetch fixtures. The official form rendered; submission returned `monitor` and `I need more screen space for debugging`; the acknowledgement recalled the original marker and the workflow reached `completed`. Server events independently recorded form creation and a nonduplicate acknowledgement with the same request ID. This is separate from mock-based regression tests, not an unattended live test. The pasted result does not independently establish a laptop-to-monitor change.
-
-**Live, skill version (2026-11-16):** after the skill and router instructions were pushed and published, a user-driven run of the redesigned desk flow completed: form and nonduplicate acknowledgement for one request ID in one conversation, passing strict validation. The global instructions no longer contain the contract, which indicates the skill was applied. D2E returns only a `turn.complete` event and Dataverse transcripts for this harness contain no skill nodes, so direct proof of skill invocation comes only from the portal activity map. Set `LOG_LEVEL=DEBUG` to log D2E event/trace activity names, never values.
+Server log lines recorded the self-reported skill, component count, offered server actions and `correctionUsed:false` for every live turn. **Direct proof** that a skill was invoked is available only in the Copilot Studio portal's activity map, because D2E returns only a `turn.complete` event for this harness. Set `LOG_LEVEL=DEBUG` to log D2E activity names (never their values).
 
 | Symptom | Action |
 | --- | --- |
 | Agent calls are gated | Verify the published no-write agent, set `MCS_AGENT_READY=true`, and restart |
-| Admin approval required | Ask your Entra administrator for delegated `CopilotStudio.Copilots.Invoke` consent |
-| Sign-in session expired | Reload the app and select **Sign in with Microsoft** again in the same browser |
-| Original request box is locked | Edit Device and Justification in the rendered A2UI form instead |
-| Protocol/schema error | Inspect sanitized diagnostics; align the agent's published instructions with the strict contract |
-| Timeout or uncertain outcome | Do not blindly resubmit; restart for a fresh in-memory demo session |
-
-The remote agent was verified (fresh clone) with no tools or connections, default WorkIQ disabled, feedback preserved, and exactly the skill plus router instructions added. The portal's web-search setting is still enabled; the router instructions forbid web search, but this is instruction-level, not a hard control. Do not assume sync previews are read-only: an earlier management preview logged `SaveChangesAsync`.
+| Admin approval required | Ask your Entra admin for delegated `CopilotStudio.Copilots.Invoke` consent |
+| Icons show as words | The Material Icons font isn't loaded; keep the `@fontsource/material-icons` import |
+| "Protocol" or validation error on a turn | Open **Under the hood**, read the validator reason, and fix the skill template |
+| Timeout | Don't resubmit blindly; select **Restart** for a fresh conversation |
 
 ## References
 
-- [Official A2UI quickstart](https://a2ui.org/quickstart/)
-- [Official A2UI repository](https://github.com/google/A2UI)
+- [A2UI quickstart](https://a2ui.org/quickstart/) · [A2UI repository](https://github.com/google/A2UI)
 - [Microsoft Agents Copilot Studio Node.js client sample](https://github.com/microsoft/Agents/tree/main/samples/nodejs/copilotstudio-client)

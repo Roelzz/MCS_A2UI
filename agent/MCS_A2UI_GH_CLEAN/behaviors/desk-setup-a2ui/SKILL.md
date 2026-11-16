@@ -1,62 +1,108 @@
 ---
 name: desk-setup-a2ui
-description: Use when a user message is a version-1 JSON envelope of type equipment_request or equipment_submit from the "Build your perfect desk" demo app, including one exact retry of that same envelope. Returns only the business JSON (equipment_form, equipment_ack or equipment_error) that the app validates and renders as an A2UI form. Do not use for ordinary chat, other UI requests, or anything that would buy, submit, provision or change records.
+description: Use when the user asks for a laptop, monitor, headset or other desk or equipment upgrade (e.g. "I need a laptop for local development"), or when a JSON envelope is a ui_action or correction for a surfaceId starting with desk-. Returns an agent-authored A2UI v0.9 desk setup form and a receipt. Demo only; never buys, provisions or submits anything.
 ---
 <!-- bic:source=blank -->
 
-# Desk setup v1 protocol
+# Build your perfect desk (A2UI)
 
-## When to use this skill
+## When to use
 
-Use this procedure only when the current user activity is a version-1 `equipment_request` or `equipment_submit` JSON envelope, or an exact-envelope correction/retry of one of those protocol stages in the same conversation. Do not use it to answer ordinary questions, unrelated requests, or generate arbitrary UI. Do not retrieve information, call tools, or cause external effects.
+- A `chat` envelope asking for a laptop, monitor, headset or another desk/equipment upgrade.
+- A `ui_action` or `correction` envelope for surface `desk-setup`.
 
-The host application validates the response strictly. Return only the business JSON described below. The backend owns A2UI component definitions; never return A2UI, UI markup, or any other invented schema.
+Do not use for morning briefs, policy questions, credit cases or general chat.
 
-## Global response and safety constraints
+## State rules
 
-- For each applicable user activity, emit exactly one ordinary text activity containing exactly one valid JSON object. Do not add Markdown fences, prose, explanations, or extra objects.
-- This is a demonstration only. Never submit, purchase, provision, create a ticket, request approval, or create or modify any record.
-- Preserve identifiers and submitted values exactly when the contract requires it. JSON-escape strings so decoded values remain unchanged.
-- Never include, quote, summarize, or otherwise reveal `contextMarker` in an initial response or error response.
-- Use conversation history to identify the stage and retrieve `contextMarker` only from the first user activity. Never invent or infer identifiers or context.
+- `chat`: choose the closest device (`laptop`, `monitor` or `headset`; default `laptop`). Set `device` to a one-item array like `["monitor"]`, `title` to "A <device> for you", `intro` to one sentence on why it fits the request, and `justification` to a short first-person reason based on the user's words (max 200 characters). `text`: "Here's a good fit — change anything you like."
+- `desk_submit` (`context.device` is an array with one of laptop/monitor/headset, `context.justification` is text):
+  - If the device is missing or unknown, or the justification is blank: return the form again with the user's values and `intro` explaining what to fix.
+  - Otherwise return the receipt template (same surfaceId `desk-setup`) with `deviceLabel` like "Monitor" and `justification` exactly as submitted. `text` must include: "Demo request received — nothing was purchased or submitted."
+- `desk_restart`: return the form again with the last values.
 
-## Initial equipment request
+## Protocol (shared by every A2UI skill in this agent)
 
-The first user activity is expected to be a JSON object with `version: 1`, `type: "equipment_request"`, a UUID `requestId`, an opaque string `contextMarker`, and nonblank `userText`.
+The demo app sends exactly one JSON envelope per user turn and validates your reply strictly.
 
-The host may repeat the exact same initial request once after a response fails contract validation. Treat the repeated `requestId` and `contextMarker` as a correction of the same request. Return the form again in the required shape; do not reset or replace the original context.
+Input envelopes (ordinary message text):
+- `{"version":2,"type":"chat","turnId":"<uuid>","text":"<what the user typed>"}`
+- `{"version":2,"type":"ui_action","turnId":"<uuid>","surfaceId":"<id>","name":"<action>","context":{...}}` — the user clicked a button on a surface you sent earlier.
+- `{"version":2,"type":"correction","turnId":"<uuid>","problem":"<reason>"}` — your previous reply for this turnId was rejected. Fix the problem and send the full corrected reply once, with the same turnId.
 
-For a valid request:
+Your reply is exactly one JSON object and nothing else — no Markdown fences, no prose before or after:
 
-1. Infer one supported device from `userText`: exactly `laptop`, `monitor`, or `headset`.
-2. Write a concise justification grounded in `userText`. It must be nonblank and no more than 1000 characters.
-3. Preserve `requestId` exactly.
-4. Return exactly this shape, with no additional properties:
+`{"version":2,"type":"ui","turnId":"<echo the input turnId>","scenario":"desk","skill":"desk-setup-a2ui","text":"<one short sentence, max 200 characters>","messages":[ <the three A2UI messages> ]}`
 
-   `{"version":1,"type":"equipment_form","requestId":"<same requestId>","device":"laptop|monitor|headset","justification":"<concise justification>"}`
+Rules for `messages`:
+- Copy the `createSurface` and `updateComponents` messages from the template below **exactly** (same ids, components, actions and checks). Do not add, remove or rename components and do not invent component types.
+- Only change the `value` of the `updateDataModel` message, following the state rules below. Keep every key; use `""` or `[]` for empty values.
+- Use only plain text in strings: no URLs, HTML, Markdown links or scripts. Use JSON escaping so the reply parses with a strict JSON parser.
+- If you cannot produce a valid surface, reply `{"version":2,"type":"error","turnId":"<echo>","message":"<short reason>"}` instead.
 
-If the JSON is malformed, the envelope is unsupported, `userText` is missing/blank, or a supported device cannot be inferred, return an `equipment_error` object instead. Use `fieldErrors` only for `userText`, `device`, and `justification`, including only fields that need correction. For an invalid/unsupported initial envelope or missing/invalid `requestId`, use `userText` as the `fieldErrors` key and briefly explain that a valid equipment request could not be read. Use the supplied `requestId` exactly when present; use an empty string only when it is absent. Set `submissionId` to the empty string. Initial error shape:
+Safety: this is a demo with fictional data. Nothing is approved, sent, booked or changed anywhere. Never call tools, connectors, knowledge or the web, and never claim a real-world effect.
 
-`{"version":1,"type":"equipment_error","requestId":"<same requestId>","submissionId":"","fieldErrors":{"<userText|device|justification>":"<brief error>"}}`
+## Template: surface desk-setup (form)
 
-## Follow-up equipment submission
+```json
+[
+{"version":"v0.9","createSurface":{"surfaceId":"desk-setup","catalogId":"https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json"}},
+{"version":"v0.9","updateComponents":{"surfaceId":"desk-setup","components":[
+{"id":"root","component":"Card","child":"col"},
+{"id":"col","component":"Column","children":["title","intro","device","justification","submit","note"]},
+{"id":"title","component":"Text","text":{"path":"/title"},"variant":"h3"},
+{"id":"intro","component":"Text","text":{"path":"/intro"}},
+{"id":"device","component":"ChoicePicker","label":"Device","variant":"mutuallyExclusive","displayStyle":"chips","options":[{"label":"Laptop","value":"laptop"},{"label":"Monitor","value":"monitor"},{"label":"Headset","value":"headset"}],"value":{"path":"/device"}},
+{"id":"justification","component":"TextField","label":"How it helps your work","value":{"path":"/justification"},"checks":[{"condition":{"call":"length","args":{"value":{"path":"/justification"},"max":300}},"message":"Keep it under 300 characters."}]},
+{"id":"submit","component":"Button","child":"submit-t","action":{"event":{"name":"desk_submit","context":{"device":{"path":"/device"},"justification":{"path":"/justification"}}}},"variant":"primary","checks":[{"condition":{"call":"required","args":{"value":{"path":"/device"}}},"message":"Pick a device."},{"condition":{"call":"required","args":{"value":{"path":"/justification"}}},"message":"Tell us how it helps."}]},
+{"id":"submit-t","component":"Text","text":"Send my desk request"},
+{"id":"note","component":"Text","text":"Demo only — nothing is purchased or submitted.","variant":"caption"}
+]}},
+{
+ "version": "v0.9",
+ "updateDataModel": {
+  "surfaceId": "desk-setup",
+  "path": "/",
+  "value": {
+   "title": "A laptop for you",
+   "intro": "You want to run local development tools wherever you work.",
+   "device": [
+    "laptop"
+   ],
+   "justification": "I run local development tools and need a laptop that can keep up."
+  }
+ }
+}
+]
+```
 
-The second user activity in the same conversation is expected to be a JSON object with `version: 1`, `type: "equipment_submit"`, the same `requestId`, a UUID `submissionId`, one supported device, and a nonblank edited `justification`.
+## Template: surface desk-setup (receipt)
 
-The host may repeat the exact same `submissionId` and values once only after receiving an invalid response. Treat it as a correction of the same demo submission; return the acknowledgement again in the required shape with the same IDs and values. Never perform any operation or external effect.
-
-For a valid submission:
-
-1. Preserve the decoded submitted `requestId`, `submissionId`, `device`, and `justification` exactly. Do not trim, rewrite, normalize, or summarize the submitted justification.
-2. Retrieve `contextMarker` only from the first user activity in this conversation.
-3. Return exactly this shape, with no additional properties:
-
-   `{"version":1,"type":"equipment_ack","requestId":"<same requestId>","submissionId":"<same submissionId>","status":"received_demo","device":"<same device>","justification":"<same justification>","message":"Demo request received — nothing was purchased or submitted. Context check: <exact contextMarker from first turn>"}`
-
-Never invent or infer `contextMarker`; do not expose it before this acknowledgement. JSON-escape string values as required for valid JSON while preserving their decoded values.
-
-If a submission field is invalid, return an `equipment_error` object with `version: 1`, `type: "equipment_error"`, the supplied `requestId` and `submissionId` (use an empty string only for either missing ID), and `fieldErrors` containing only supported keys from `device` and `justification` that need correction. If the IDs or prior context cannot be verified, do not fabricate them or produce an acknowledgement; return a brief `equipment_error` using a supported `fieldErrors` key. Follow-up error shape:
-
-`{"version":1,"type":"equipment_error","requestId":"<same requestId>","submissionId":"<same submissionId>","fieldErrors":{"<device|justification>":"<brief error>"}}`
-
-Keep the protocol stage-specific. Do not answer outside these JSON shapes, and do not emit `contextMarker` in the initial response or any error response.
+```json
+[
+{"version":"v0.9","createSurface":{"surfaceId":"desk-setup","catalogId":"https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json"}},
+{"version":"v0.9","updateComponents":{"surfaceId":"desk-setup","components":[
+{"id":"root","component":"Card","child":"col"},
+{"id":"col","component":"Column","children":["head","device","justification","disclaimer","again"]},
+{"id":"head","component":"Row","children":["icon","title"],"align":"center"},
+{"id":"icon","component":"Icon","name":"check"},
+{"id":"title","component":"Text","text":"You're set","variant":"h3"},
+{"id":"device","component":"Text","text":{"path":"/deviceLabel"},"variant":"h4"},
+{"id":"justification","component":"Text","text":{"path":"/justification"}},
+{"id":"disclaimer","component":"Text","text":"Demo request received — nothing was purchased or submitted."},
+{"id":"again","component":"Button","child":"again-t","action":{"event":{"name":"desk_restart"}},"variant":"borderless"},
+{"id":"again-t","component":"Text","text":"Change my setup"}
+]}},
+{
+ "version": "v0.9",
+ "updateDataModel": {
+  "surfaceId": "desk-setup",
+  "path": "/",
+  "value": {
+   "deviceLabel": "Monitor",
+   "justification": "I need more screen space for debugging."
+  }
+ }
+}
+]
+```

@@ -5,9 +5,9 @@ import { pathToFileURL } from "node:url";
 import { DelegatedAuthService } from "./auth.js";
 import { loadConfig, type AppConfig } from "./config.js";
 import { createAgentTransportFactory } from "./d2e.js";
-import { DemoOperationError, EquipmentDemoService } from "./equipment-service.js";
+import { ChatDemoService, DemoOperationError } from "./chat-service.js";
 import { parseStrictJson } from "./contracts.js";
-import { SessionStore, type Session, type WorkflowState } from "./session-store.js";
+import { SessionStore, type Session, type TranscriptEntry } from "./session-store.js";
 
 const SESSION_COOKIE = "mcs_demo_session";
 const COOKIE_MAX_AGE_SECONDS = 30 * 60;
@@ -22,14 +22,14 @@ export interface DemoServer {
 export function createDemoServer(config: AppConfig = loadConfig()): DemoServer {
   const sessions = new SessionStore();
   const auth = new DelegatedAuthService(config);
-  const equipment = new EquipmentDemoService(
+  const chat = new ChatDemoService(
     sessions,
     (session) => auth.getAccessToken(session),
     createAgentTransportFactory(config.connectionSettings),
     config.agentReady,
   );
   const server = createServer((request, response) => {
-    void handleRequest(request, response, config, sessions, auth, equipment).catch((error: unknown) => {
+    void handleRequest(request, response, config, sessions, auth, chat).catch((error: unknown) => {
       log(config, "request_failed", {
         method: request.method,
         path: safePath(request.url),
@@ -83,7 +83,7 @@ async function handleRequest(
   config: AppConfig,
   sessions: SessionStore,
   auth: DelegatedAuthService,
-  equipment: EquipmentDemoService,
+  chat: ChatDemoService,
 ): Promise<void> {
   setSecurityHeaders(response);
   if (request.headers.host !== "localhost:2009") {
@@ -119,58 +119,48 @@ async function handleRequest(
       return;
     }
 
-    if (request.method === "GET" && url.pathname === "/api/workflow") {
+    if (request.method === "GET" && url.pathname === "/api/conversation") {
       const session = requireSession(request, sessions, response);
       if (!session) return;
-      sendJson(response, 200, equipment.snapshot(session));
+      sendJson(response, 200, chat.snapshot(session));
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/api/equipment/reset") {
+    if (request.method === "POST" && url.pathname === "/api/conversation/start") {
       const session = requireSession(request, sessions, response);
       if (!session) return;
-      const body = await readJsonBody(request);
-      if (!body || typeof body !== "object" || Object.keys(body).length !== 0) {
-        throw new DemoOperationError(400, "INVALID_RESET", "Reset expects an empty JSON object.");
-      }
-      await equipment.reset(session);
-      log(config, "equipment_workflow_reset", {});
+      await requireEmptyBody(request);
+      const entries = await chat.start(session);
+      logEntries(config, "conversation_started", entries);
+      sendJson(response, 200, { entries, ...chat.snapshot(session) });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/chat") {
+      const session = requireSession(request, sessions, response);
+      if (!session) return;
+      const entries = await chat.chat(session, await readJsonBody(request));
+      logEntries(config, "chat_turn", entries);
+      sendJson(response, 200, { entries, ...chat.snapshot(session) });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/action") {
+      const session = requireSession(request, sessions, response);
+      if (!session) return;
+      const entries = await chat.action(session, await readJsonBody(request));
+      logEntries(config, "action_turn", entries);
+      sendJson(response, 200, { entries, ...chat.snapshot(session) });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/reset") {
+      const session = requireSession(request, sessions, response);
+      if (!session) return;
+      await requireEmptyBody(request);
+      await chat.reset(session);
+      log(config, "conversation_reset", {});
       sendJson(response, 200, { reset: true });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/api/equipment/request") {
-      const session = requireSession(request, sessions, response);
-      if (!session) return;
-      const body = await readJsonBody(request);
-      const result = await equipment.request(session, body);
-      log(config, "equipment_form_ready", { requestId: result.form.requestId });
-      sendJson(response, 200, {
-        form: result.form,
-        surfaceMessages: result.surfaceMessages,
-        diagnostics: { requestId: result.form.requestId, protocol: "v0.9", messageCount: result.surfaceMessages.length },
-      });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/api/equipment/submit") {
-      const session = requireSession(request, sessions, response);
-      if (!session) return;
-      const body = await readJsonBody(request);
-      const result = await equipment.submit(session, body);
-      log(config, "equipment_acknowledged", {
-        requestId: result.ack.requestId,
-        duplicate: result.duplicate,
-      });
-      sendJson(response, 200, {
-        ack: result.ack,
-        duplicate: result.duplicate,
-        diagnostics: {
-          requestId: result.ack.requestId,
-          submissionId: result.ack.submissionId,
-          duplicate: result.duplicate,
-        },
-      });
       return;
     }
 
@@ -189,21 +179,43 @@ async function handleRequest(
 }
 
 function statusFor(session: Session, agentReady: boolean) {
-  const workflow = session.workflow;
   return {
     authenticated: Boolean(session.auth && session.auth.expiresOn > Date.now()),
     authError: session.authError ?? null,
     agentReady,
-    workflow: {
-      phase: workflow.phase,
-      requestId: workflowRequestId(workflow),
+    conversation: {
+      started: Boolean(session.conversation.conversationId),
+      status: session.conversation.status,
     },
     runtime: "in-memory",
   };
 }
 
-function workflowRequestId(workflow: WorkflowState): string | null {
-  return workflow.phase === "new" ? null : workflow.requestId;
+async function requireEmptyBody(request: IncomingMessage): Promise<void> {
+  const body = await readJsonBody(request);
+  if (!body || typeof body !== "object" || Object.keys(body).length !== 0) {
+    throw new DemoOperationError(400, "INVALID_BODY", "This endpoint expects an empty JSON object.");
+  }
+}
+
+function logEntries(config: AppConfig, event: string, entries: TranscriptEntry[]): void {
+  for (const entry of entries) {
+    if (entry.kind === "agent_ui" || entry.kind === "agent_text") {
+      const d = entry.diagnostics;
+      log(config, event, {
+        turnId: d.turnId,
+        responseType: d.responseType,
+        selfReportedSkill: d.selfReportedSkill ?? null,
+        surfaceId: d.surfaceId ?? null,
+        revision: d.revision ?? null,
+        components: d.componentCount ?? null,
+        serverActions: d.serverActions ?? null,
+        correctionUsed: d.correctionUsed,
+        bytes: d.responseBytes,
+        latencyMs: d.latencyMs,
+      });
+    }
+  }
 }
 
 async function handleAuthCallback(
