@@ -1,0 +1,5 @@
+mcs.metadata:
+  componentName: desk-setup-a2ui
+  description: Use when a user message is a version-1 JSON envelope of type equipment_request or equipment_submit from the "Build your perfect desk" demo app, including one exact retry of that same envelope. Returns only the business JSON (equipment_form, equipment_ack or equipment_error) that the app validates and renders as an A2UI form. Do not use for ordinary chat, other UI requests, or anything that would buy, submit, provision or change records.
+  schemaName: rrs_mcs_a2ui_qHqHEj.skill.desk-setup-a2ui_Dk7sQ2
+kind: InlineAgentSkill

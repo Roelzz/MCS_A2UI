@@ -119,6 +119,26 @@ async function handleRequest(
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/workflow") {
+      const session = requireSession(request, sessions, response);
+      if (!session) return;
+      sendJson(response, 200, equipment.snapshot(session));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/equipment/reset") {
+      const session = requireSession(request, sessions, response);
+      if (!session) return;
+      const body = await readJsonBody(request);
+      if (!body || typeof body !== "object" || Object.keys(body).length !== 0) {
+        throw new DemoOperationError(400, "INVALID_RESET", "Reset expects an empty JSON object.");
+      }
+      await equipment.reset(session);
+      log(config, "equipment_workflow_reset", {});
+      sendJson(response, 200, { reset: true });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/equipment/request") {
       const session = requireSession(request, sessions, response);
       if (!session) return;
@@ -196,7 +216,7 @@ async function handleAuthCallback(
 ): Promise<void> {
   const session = sessions.get(readSessionCookie(request));
   if (!session) {
-    sendText(response, 401, "The sign-in session expired. Return to the demo and request a new sign-in link.");
+    sendText(response, 401, "The sign-in session expired. Return to the demo and select Sign in with Microsoft again.");
     return;
   }
   setSessionCookie(response, session);

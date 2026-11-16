@@ -79,6 +79,7 @@ export interface Session {
   auth?: AuthState;
   pendingAuth?: PendingAuth;
   authError?: string;
+  requestText?: string;
   workflow: WorkflowState;
   queue: Promise<void>;
 }

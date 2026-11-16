@@ -12,6 +12,7 @@ import { createEquipmentSurface } from "../src/server/a2ui.js";
 import { D2EProtocolError, extractSingleTextActivity } from "../src/server/d2e.js";
 import { EquipmentDemoService } from "../src/server/equipment-service.js";
 import { SessionStore } from "../src/server/session-store.js";
+import { bindDeskPreview } from "../src/client/desk-model.js";
 
 const DISCLAIMER = "Demo request received — nothing was purchased or submitted.";
 
@@ -58,6 +59,8 @@ test("official A2UI processor validates and binds the fixed equipment form", () 
   assert.equal(surface.componentsModel.get("device")?.type, "ChoicePicker");
   assert.equal(surface.componentsModel.get("justification")?.type, "TextField");
   assert.equal(surface.componentsModel.get("submit")?.type, "Button");
+  const unbind = bindDeskPreview(surface.dataModel);
+  assert.equal(surface.dataModel.get("/preview/label"), "Laptop");
   assert.deepEqual(surface.componentsModel.get("submit")?.properties.action, {
     event: {
       name: "equipment_submit",
@@ -71,6 +74,13 @@ test("official A2UI processor validates and binds the fixed equipment form", () 
   surface.dataModel.set("/justification", "I need more screen space for debugging");
   assert.deepEqual(surface.dataModel.get("/deviceSelection"), ["monitor"]);
   assert.equal(surface.dataModel.get("/justification"), "I need more screen space for debugging");
+  assert.equal(surface.dataModel.get("/preview/label"), "Monitor");
+  assert.match(surface.dataModel.get<string>("/preview/detail"), /side by side/);
+  surface.dataModel.set("/deviceSelection", ["headset"]);
+  assert.equal(surface.dataModel.get("/preview/label"), "Headset");
+  assert.match(surface.dataModel.get<string>("/preview/benefit"), /clearer conversation/);
+  assert.equal(surface.componentsModel.get("summary-justification")?.properties.text.path, "/justification");
+  unbind();
   processor.dispose();
 });
 
@@ -211,6 +221,7 @@ test("invalid inputs and a timeout cannot trigger a duplicate or blind retry", a
     (error: unknown) => error instanceof Error && "code" in error && error.code === "UPSTREAM_TIMEOUT",
   );
   assert.equal(session.workflow.phase, "uncertain");
+  await assert.rejects(service.reset(session), { code: "RESET_NOT_AVAILABLE" });
   await assert.rejects(
     service.request(session, { userText: "Try again" }),
     (error: unknown) => error instanceof Error && "code" in error && error.code === "SESSION_ALREADY_USED",
@@ -279,6 +290,7 @@ test("malformed agent JSON gets one bounded correction before blocking replay", 
   );
   assert.equal(session.workflow.phase, "uncertain");
   assert.equal(sendCount, 2);
+  await assert.rejects(service.reset(session), { code: "RESET_NOT_AVAILABLE" });
   await assert.rejects(
     service.request(session, { userText: "Retry the same request" }),
     (error: unknown) => error instanceof Error && "code" in error && error.code === "SESSION_ALREADY_USED",
@@ -413,4 +425,94 @@ test("sessions cannot submit another session's request correlation ID", async ()
     (error: unknown) => error instanceof Error && "code" in error && error.code === "REQUEST_MISMATCH",
   );
   assert.equal(conversations.length, 2);
+});
+
+test("reload snapshots send no turns and Try another preserves auth with a fresh conversation", async () => {
+  const sessions = new SessionStore();
+  const session = sessions.create();
+  session.auth = {
+    accessToken: "test-access-token",
+    expiresOn: Date.now() + 60_000,
+    account: { homeAccountId: "test", localAccountId: "test", environment: "test", tenantId: "test", username: "test" },
+  };
+  const auth = session.auth;
+  const sent: Array<{ conversationId: string; envelope: Record<string, unknown> }> = [];
+  const markers = new Map<string, unknown>();
+  let starts = 0;
+  const service = new EquipmentDemoService(sessions, async () => "test-access-token", () => ({
+    startConversation: async () => `desk-${++starts}`,
+    sendMessage: async (conversationId, text) => {
+      const envelope = JSON.parse(text) as Record<string, unknown>;
+      sent.push({ conversationId, envelope });
+      if (envelope.type === "equipment_request") {
+        markers.set(conversationId, envelope.contextMarker);
+        return JSON.stringify({ version: 1, type: "equipment_form", requestId: envelope.requestId, device: "laptop", justification: "Build and code" });
+      }
+      return JSON.stringify({
+        ...envelope, type: "equipment_ack", status: "received_demo",
+        message: `${DISCLAIMER} Context check: ${String(markers.get(conversationId))}`,
+      });
+    },
+  }), true);
+  const first = await service.request(session, { userText: "A laptop for development" });
+  const beforeSubmit = service.snapshot(session);
+  assert.equal(beforeSubmit.phase, "form_ready");
+  assert.equal(beforeSubmit.userText, "A laptop for development");
+  assert.equal(beforeSubmit.form?.requestId, first.form.requestId);
+  assert.equal(beforeSubmit.surfaceMessages.length, 3);
+  assert.equal("conversationId" in beforeSubmit, false);
+  assert.equal("auth" in beforeSubmit, false);
+  assert.equal(sent.length, 1);
+  await assert.rejects(service.reset(session), { code: "RESET_NOT_AVAILABLE" });
+  const submission = { requestId: first.form.requestId, device: "monitor", justification: "More space for debugging" };
+  const confirmed = await service.submit(session, submission);
+  const restored = service.snapshot(session);
+  assert.equal(restored.phase, "completed");
+  assert.deepEqual(restored.ack, confirmed.ack);
+  assert.equal(restored.form?.device, "monitor");
+  assert.equal(restored.form?.justification, submission.justification);
+  assert.equal(sent.length, 2);
+  await service.reset(session);
+  assert.equal(session.auth, auth);
+  assert.equal(service.snapshot(session).phase, "new");
+  assert.equal(service.snapshot(session).form, null);
+  assert.equal(service.snapshot(session).userText, "");
+  const second = await service.request(session, { userText: "Another desk upgrade" });
+  assert.notEqual(second.form.requestId, first.form.requestId);
+  assert.equal(starts, 2);
+  assert.deepEqual(sent.map((turn) => turn.conversationId), ["desk-1", "desk-1", "desk-2"]);
+  await assert.rejects(service.submit(session, submission), { code: "REQUEST_MISMATCH" });
+  const secondAck = await service.submit(session, { ...submission, requestId: second.form.requestId });
+  assert.notEqual(secondAck.ack.submissionId, confirmed.ack.submissionId);
+  assert.notEqual(markers.get("desk-1"), markers.get("desk-2"));
+});
+
+test("reset is rejected immediately while a submission is in flight", async () => {
+  const sessions = new SessionStore();
+  const session = sessions.create();
+  let marker = "";
+  let release: (() => void) | undefined;
+  let notifySending: (() => void) | undefined;
+  const sending = new Promise<void>((resolve) => { notifySending = resolve; });
+  const service = new EquipmentDemoService(sessions, async () => "test-access-token", () => ({
+    startConversation: async () => "desk-inflight",
+    sendMessage: async (_conversationId, text) => {
+      const envelope = JSON.parse(text) as Record<string, unknown>;
+      if (envelope.type === "equipment_request") {
+        marker = String(envelope.contextMarker);
+        return JSON.stringify({ version: 1, type: "equipment_form", requestId: envelope.requestId, device: "laptop", justification: "Development" });
+      }
+      await new Promise<void>((resolve) => { release = resolve; notifySending?.(); });
+      return JSON.stringify({ ...envelope, type: "equipment_ack", status: "received_demo", message: `${DISCLAIMER} Context check: ${marker}` });
+    },
+  }), true);
+  const { form } = await service.request(session, { userText: "Need a laptop" });
+  const pending = service.submit(session, { requestId: form.requestId, device: "headset", justification: "Focus" });
+  await sending;
+  assert.equal(session.workflow.phase, "submitting");
+  await assert.rejects(service.reset(session), { code: "RESET_NOT_AVAILABLE" });
+  assert.ok(release);
+  release();
+  await pending;
+  assert.equal(session.workflow.phase, "completed");
 });

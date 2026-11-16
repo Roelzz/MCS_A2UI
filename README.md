@@ -2,7 +2,7 @@
 
 **Keep the agent in Copilot Studio. Own the user experience in your application.**
 
-This TypeScript sample demonstrates a custom React interface for Microsoft Copilot Studio (MCS), using the official [A2UI](https://a2ui.org/quickstart/) renderer and the Microsoft Agents **Direct-to-Engine (D2E)** client. A natural-language request becomes an editable equipment form, and its submitted values return to the same agent conversation.
+This TypeScript sample demonstrates a custom React interface for Microsoft Copilot Studio (MCS), using the official [A2UI](https://a2ui.org/quickstart/) renderer and the Microsoft Agents **Direct-to-Engine (D2E)** client. The demo is called **Build your perfect desk**: describe what would make your workday better, and Copilot Studio recommends a desk upgrade that you can tweak in a live A2UI form and confirm in the same agent conversation.
 
 The purpose of sharing this sample is to make that integration pattern concrete: delegated sign-in, structured agent responses, a controlled UI contract, native A2UI interactions, and conversation continuity. It is a small, inspectable starting point for developers exploring an alternative to a chat-only interface.
 
@@ -22,16 +22,17 @@ There is no Direct Line, A2A server, AG-UI layer, Python service, or additional 
 
 ## The experience
 
-1. Sign in, then describe the request: **"I need a laptop for running local development tools."**
-2. Copilot Studio infers a device and justification. The backend validates its response and supplies an A2UI surface to the browser.
-3. In the rendered form, change the device to **Monitor** and the justification to **"I need more screen space for debugging"**.
-4. Submit once. The agent acknowledges those exact values in the same conversation:
+1. Select **Sign in with Microsoft**. The same tab goes to Microsoft and returns to the demo.
+2. Pick a starter (**Build and code**, **More room to think**, **Meet without distractions**) or type your own sentence, then select **Find my desk upgrade**.
+3. Copilot Studio, using its `desk-setup-a2ui` skill, returns a recommended device (laptop, monitor or headset) and a reason. The backend validates that business JSON and sends an A2UI surface to the browser.
+4. Make it yours. Switching the device in the A2UI choice picker instantly updates the preview title, benefit and detail through native A2UI data binding, with no agent round trip. Edit the reason too.
+5. Select **Confirm my demo setup** once. The same conversation returns a receipt echoing your exact edits, plus:
 
    **"Demo request received — nothing was purchased or submitted."**
 
-The original request-description box locks after form creation. Make edits in the A2UI **Device** and **Justification** controls below it.
+6. Select **Try another setup** for a fresh agent conversation without signing in again. Reloading mid-flow restores the current step without sending a new agent turn.
 
-**Screenshots:** live entry, editable-form, and acknowledgement captures are pending. They will be added from the real application, not staged responses.
+**Screenshots:** pending; they will be captured from the real application, not staged responses.
 
 ## Architecture
 
@@ -41,7 +42,7 @@ One Node.js process serves the built React application and its API at **`http://
 flowchart TB
     User["User"]:::person
     Entra["Microsoft Entra ID<br/>Delegated sign-in and consent"]:::identity
-    MCS["Microsoft Copilot Studio<br/>Published instruction-based agent"]:::agent
+    MCS["Microsoft Copilot Studio<br/>Published agent + desk-setup-a2ui skill"]:::agent
 
     subgraph Local["Local application - localhost:2009"]
         direction TB
@@ -82,11 +83,35 @@ flowchart TB
 
 ### Three responsibilities, deliberately separated
 
-**Copilot Studio interprets the request.** Its instructions describe a versioned equipment-request protocol. It infers supported business values and acknowledges submissions. The tested agent uses the **GitHub Copilot harness** (`cliagent-1.0.0`), with natural-language instructions and no topics or global variables. Do not treat this configuration as a classic topic-based agent template.
+**Copilot Studio interprets the request.** The agent uses the **GitHub Copilot harness** (`cliagent-1.0.0`), with no topics or global variables. Its global instructions are a short router; the versioned protocol lives in the runtime skill **`desk-setup-a2ui`**. The skill infers supported business values and acknowledges submissions. Do not treat this configuration as a classic topic-based agent template.
 
 **The backend owns the contract and the UI definition.** It checks agent output, constructs the A2UI component tree, initializes the data model, and retains conversation/session state. An agent response cannot introduce scripts, new controls, arbitrary actions, or external business operations.
 
 **React hosts the official A2UI renderer.** The surrounding page is ordinary React. The equipment selector, justification field, and submit action are rendered from A2UI messages using `MessageProcessor`, `A2uiSurface`, and the official basic catalog. Editing updates the native data model; submission resolves bound values into the action context.
+
+### The agent skill: when it is used
+
+The skill is the part of the agent that knows the A2UI demo contract. Its description tells the orchestrator exactly when to load it:
+
+> Use when a user message is a version-1 JSON envelope of type `equipment_request` or `equipment_submit` from the "Build your perfect desk" demo app, including one exact retry of that same envelope. Returns only the business JSON (`equipment_form`, `equipment_ack` or `equipment_error`) that the app validates and renders as an A2UI form. Do not use for ordinary chat, other UI requests, or anything that would buy, submit, provision or change records.
+
+```mermaid
+flowchart LR
+    Msg["Incoming D2E message"]:::input --> Router{"Router instructions<br/>v1 desk envelope?"}:::router
+    Router -->|"equipment_request /<br/>equipment_submit"| Skill["desk-setup-a2ui skill<br/>business JSON only"]:::skill
+    Router -->|"anything else"| Refuse["Brief reply:<br/>desk demo only"]:::refuse
+    Skill --> Out["equipment_form / equipment_ack /<br/>equipment_error"]:::output
+    Out --> App["Backend validation<br/>→ allowlisted A2UI"]:::app
+
+    classDef input fill:#fef3c7,stroke:#b45309,color:#78350f
+    classDef router fill:#ede9fe,stroke:#7c3aed,color:#4c1d95
+    classDef skill fill:#fce7f3,stroke:#be185d,color:#831843
+    classDef refuse fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    classDef output fill:#d1fae5,stroke:#059669,color:#064e3b
+    classDef app fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+```
+
+The skill never emits A2UI or UI markup: the app owns every component. That keeps the agent swappable and the UI safe.
 
 ### The request-to-acknowledgement round trip
 
@@ -168,7 +193,8 @@ Only `laptop`, `monitor`, and `headset` are supported. The schemas bound input s
 
 | Location | Responsibility |
 | --- | --- |
-| [`src/client/main.tsx`](src/client/main.tsx) | React shell, official renderer lifecycle, action handling, API calls |
+| [`src/client/main.tsx`](src/client/main.tsx) | React shell, official renderer lifecycle, action handling, restore/reset, API calls |
+| [`src/client/desk-model.ts`](src/client/desk-model.ts) | Live device preview through an official A2UI `DataModel` subscription |
 | [`src/server/server.ts`](src/server/server.ts) | Single-origin HTTP server, API routes, static client, cookie/origin controls |
 | [`src/server/auth.ts`](src/server/auth.ts) | MSAL authorization-code flow with PKCE |
 | [`src/server/d2e.ts`](src/server/d2e.ts) | Official Copilot Studio client and response-activity handling |
@@ -176,7 +202,8 @@ Only `laptop`, `monitor`, and `headset` are supported. The schemas bound input s
 | [`src/server/a2ui.ts`](src/server/a2ui.ts) | Allowlisted A2UI component tree and bound initial data |
 | [`src/server/equipment-service.ts`](src/server/equipment-service.ts) | Conversation lifecycle, validation, correlation, and duplicate protection |
 | [`src/server/session-store.ts`](src/server/session-store.ts) | In-memory session/workflow state and serialized operations |
-| [`agent/MCS_A2UI_GH_CLEAN/settings.mcs.yml`](agent/MCS_A2UI_GH_CLEAN/settings.mcs.yml) | GitHub-harness configuration and copyable demo instructions |
+| [`agent/MCS_A2UI_GH_CLEAN/settings.mcs.yml`](agent/MCS_A2UI_GH_CLEAN/settings.mcs.yml) | GitHub-harness configuration and short router instructions |
+| [`agent/MCS_A2UI_GH_CLEAN/behaviors/desk-setup-a2ui/SKILL.md`](agent/MCS_A2UI_GH_CLEAN/behaviors/desk-setup-a2ui/SKILL.md) | Runtime agent skill with the versioned business-JSON protocol |
 | [`tests/demo.test.ts`](tests/demo.test.ts) | Contract, renderer-model, transport, and workflow regression tests |
 
 The lockfile pins `@a2ui/react` and `@a2ui/web_core` to **0.14.0**, using their **`v0_9` entry points**, and `@microsoft/agents-copilotstudio-client` to **1.10.1**. Package versions and A2UI wire-protocol versions are different; upgrade the renderer/core together and verify the protocol before changing either.
@@ -192,11 +219,24 @@ The lockfile pins `@a2ui/react` and `@a2ui/web_core` to **0.14.0**, using their 
 
 ### Configure the agent
 
-Use the natural-language instruction block at `configuration.agentSettings.instructions.segments[0].value` in [`settings.mcs.yml`](agent/MCS_A2UI_GH_CLEAN/settings.mcs.yml). For the tested GitHub-harness agent, this is its instructions surface, not a topic.
+The agent needs two things, both in [`agent/MCS_A2UI_GH_CLEAN/`](agent/MCS_A2UI_GH_CLEAN/):
 
-The demo requires a tool-free agent: verify that write-capable IQ capabilities and WorkIQ are absent and default WorkIQ inclusion is disabled. Preserve unrelated configuration and feedback when adapting an existing agent. Verify and publish the intended configuration before enabling calls. Do not blindly push the sample's connected workspace into another agent.
+1. **The skill** [`behaviors/desk-setup-a2ui/SKILL.md`](agent/MCS_A2UI_GH_CLEAN/behaviors/desk-setup-a2ui/SKILL.md) (component metadata in `skill.mcs.yml`). In the portal: **Skills → Add skill → Upload a skill**.
+2. **The router instructions** at `configuration.agentSettings.instructions.segments[0].value` in [`settings.mcs.yml`](agent/MCS_A2UI_GH_CLEAN/settings.mcs.yml).
 
-This harness was tested with an instruction-only contract. Another harness or agent must be configured and verified separately; copying the instructions is not proof of D2E compatibility or published behavior.
+The sample agent was updated with the Power Platform CLI on a sync-connected workspace, then verified with a fresh clone before publishing:
+
+```sh
+pac copilot clone --bot <agent-id> --environment <dataverse-url> --output-dir <dir>
+# add behaviors/<skill>.mcs.yml (kind: InlineAgentSkill) and edit the instructions
+pac copilot pull --project-dir <dir>/<agent>
+pac copilot push --project-dir <dir>/<agent>
+pac copilot publish --bot <agent-id> --environment <dataverse-url>
+```
+
+The demo requires an agent without write tools: verify that write-capable IQ capabilities and WorkIQ are absent and default WorkIQ inclusion is disabled. Preserve unrelated configuration and feedback when adapting an existing agent. Do not blindly push the sample's connected workspace into another agent.
+
+This harness was tested with this skill and router. Another harness or agent must be configured and verified separately; copying the files is not proof of D2E compatibility or published behavior.
 
 ### Configure Entra and local settings
 
@@ -232,7 +272,7 @@ npm start
 
 Open **[http://localhost:2009](http://localhost:2009)** in your chosen browser. The listener binds to `127.0.0.1`, but the application requires the hostname `localhost`. No additional frontend port is used.
 
-Select **Get sign-in link**, then open the provided Microsoft sign-in link yourself. Generate the link and complete sign-in in the **same browser session**: an embedded preview and an external browser do not share cookies. Sign-in is available while agent readiness is false; equipment calls remain gated until it is true. Changes to `.env` require a server restart.
+Open `http://localhost:2009` in the browser of your choice and select **Sign in with Microsoft**; the same tab goes to Microsoft and returns to the demo. Complete sign-in in the **same browser session**: an embedded preview and an external browser do not share cookies. Sign-in is available while agent readiness is false; equipment calls remain gated until it is true. Changes to `.env` require a server restart.
 
 ## Authentication, safety, and limits
 
@@ -254,20 +294,22 @@ To add a new device or a different workflow, update the contract, component opti
 
 ## Validation and troubleshooting
 
-**Automated:** the 10 tests cover strict JSON/schema handling, official A2UI processing/data binding, D2E multi-activity responses, edited values in one conversation, context recall, session isolation, duplicate suppression, invalid inputs, and uncertain timeouts. `npm run typecheck` checks both client and server; `npm run build` produces the single-process application.
+**Automated:** the 12 tests cover strict JSON/schema handling, official A2UI processing/data binding, the live device preview, reset/restore isolation, D2E multi-activity responses, edited values in one conversation, context recall, session isolation, duplicate suppression, invalid inputs, and uncertain timeouts. `npm run typecheck` checks both client and server; `npm run build` produces the single-process application.
 
 **Live:** user-driven browser acceptance passed on 2026-11-13 against the supplied published agent with real delegated sign-in and no fetch fixtures. The official form rendered; submission returned `monitor` and `I need more screen space for debugging`; the acknowledgement recalled the original marker and the workflow reached `completed`. Server events independently recorded form creation and a nonduplicate acknowledgement with the same request ID. This is separate from mock-based regression tests, not an unattended live test. The pasted result does not independently establish a laptop-to-monitor change.
+
+**Live, skill version (2026-11-16):** after the skill and router instructions were pushed and published, a user-driven run of the redesigned desk flow completed: form and nonduplicate acknowledgement for one request ID in one conversation, passing strict validation. The global instructions no longer contain the contract, which indicates the skill was applied. D2E returns only a `turn.complete` event and Dataverse transcripts for this harness contain no skill nodes, so direct proof of skill invocation comes only from the portal activity map. Set `LOG_LEVEL=DEBUG` to log D2E event/trace activity names, never values.
 
 | Symptom | Action |
 | --- | --- |
 | Agent calls are gated | Verify the published no-write agent, set `MCS_AGENT_READY=true`, and restart |
 | Admin approval required | Ask your Entra administrator for delegated `CopilotStudio.Copilots.Invoke` consent |
-| Sign-in session expired | Reload the app and generate a fresh link in the browser where you will finish sign-in |
+| Sign-in session expired | Reload the app and select **Sign in with Microsoft** again in the same browser |
 | Original request box is locked | Edit Device and Justification in the rendered A2UI form instead |
 | Protocol/schema error | Inspect sanitized diagnostics; align the agent's published instructions with the strict contract |
 | Timeout or uncertain outcome | Do not blindly resubmit; restart for a fresh in-memory demo session |
 
-The original remote agent was verified published with no active tools, default WorkIQ disabled, and feedback preserved. Its local YAML passed the Microsoft 1.9.17 validator. Do not assume sync previews are read-only: an earlier management preview logged `SaveChangesAsync`.
+The remote agent was verified (fresh clone) with no tools or connections, default WorkIQ disabled, feedback preserved, and exactly the skill plus router instructions added. The portal's web-search setting is still enabled; the router instructions forbid web search, but this is instruction-level, not a hard control. Do not assume sync previews are read-only: an earlier management preview logged `SaveChangesAsync`.
 
 ## References
 

@@ -56,6 +56,39 @@ export class EquipmentDemoService {
     private readonly timeoutMs = TURN_TIMEOUT_MS,
   ) {}
 
+  snapshot(session: Session) {
+    const workflow = session.workflow;
+    const form = "form" in workflow ? workflow.form : undefined;
+    const displayedForm = form && "device" in workflow && workflow.device && workflow.justification
+      ? { ...form, device: workflow.device, justification: workflow.justification }
+      : form;
+    return {
+      phase: workflow.phase,
+      userText: session.requestText ?? "",
+      form: displayedForm ?? null,
+      surfaceMessages: displayedForm ? createEquipmentSurface(displayedForm) : [],
+      ack: workflow.phase === "completed" ? workflow.ack : null,
+    };
+  }
+
+  async reset(session: Session): Promise<void> {
+    const requireCompleted = () => {
+      if (session.workflow.phase !== "completed") {
+        throw new DemoOperationError(
+          409,
+          "RESET_NOT_AVAILABLE",
+          "Finish the current demo before starting another. An uncertain request cannot be retried.",
+        );
+      }
+    };
+    requireCompleted();
+    await this.sessions.runExclusive(session, async () => {
+      requireCompleted();
+      session.workflow = { phase: "new" };
+      delete session.requestText;
+    });
+  }
+
   async request(session: Session, rawInput: unknown): Promise<{
     form: EquipmentForm;
     surfaceMessages: ReturnType<typeof createEquipmentSurface>;
@@ -92,6 +125,7 @@ export class EquipmentDemoService {
         throw toOperationError(error, "request");
       }
       session.workflow = { phase: "starting", requestId, contextMarker };
+      session.requestText = input.data.userText;
 
       try {
         const conversationId = await withTimeout(
