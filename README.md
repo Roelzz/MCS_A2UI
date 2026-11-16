@@ -71,6 +71,81 @@ The agent proposes a device. The user switches the ChoicePicker (laptop, monitor
 
 *Skill:* `desk-setup-a2ui` · *Components:* Card, ChoicePicker, Icon, Text, TextField, Button
 
+## How it works, in plain language
+
+Think of the app as a restaurant:
+
+- **The agent is the chef.** It decides what goes on the plate.
+- **The backend is the inspector.** It checks every plate before it leaves the kitchen.
+- **The A2UI renderer is the waiter.** It serves the plate to you.
+
+```mermaid
+flowchart LR
+    You(["👤 You<br/><b>the guest</b>"]):::you
+    Shell["🏠 React shell<br/><b>the dining room</b><br/>chat page · sign-in · status"]:::shell
+    Waiter["🍽️ A2UI renderer<br/><b>the waiter</b><br/>draws buttons, tabs, sliders"]:::waiter
+    Inspector["🛡️ Node backend<br/><b>the inspector</b><br/>checks every screen and click"]:::inspector
+    Phone["📞 D2E client<br/><b>the phone line</b><br/>one ongoing conversation"]:::phone
+    Reception{{"🛎️ Router instructions<br/><b>the receptionist</b><br/>picks the right skill"}}:::reception
+    Chefs["👩‍🍳 4 skills<br/><b>the chefs</b><br/>each writes one kind of screen"]:::chef
+    ID["🔐 Entra ID<br/><b>the ID check</b>"]:::id
+
+    You --> Shell
+    Shell --> Inspector
+    Inspector <--> ID
+    Inspector <--> Phone
+    Phone <--> Reception
+    Reception <--> Chefs
+    Inspector -->|"approved screen"| Waiter
+    Waiter --> You
+    You -.->|"click"| Waiter
+    Waiter -.->|"click"| Inspector
+
+    classDef you fill:#fef3c7,stroke:#b45309,color:#78350f,stroke-width:2px
+    classDef shell fill:#e0e7ff,stroke:#4f46e5,color:#312e81
+    classDef waiter fill:#dbeafe,stroke:#2563eb,color:#1e3a8a,stroke-width:2px
+    classDef inspector fill:#d1fae5,stroke:#059669,color:#064e3b,stroke-width:3px
+    classDef phone fill:#cffafe,stroke:#0891b2,color:#164e63
+    classDef reception fill:#ede9fe,stroke:#7c3aed,color:#4c1d95,stroke-width:2px
+    classDef chef fill:#fbcfe8,stroke:#be185d,color:#831843,stroke-width:2px
+    classDef id fill:#ffedd5,stroke:#ea580c,color:#7c2d12
+```
+
+| Component | Role | What it does |
+| --- | --- | --- |
+| **Copilot Studio router instructions** | Receptionist | Reads your message and picks the skill that should handle it. |
+| **4 skills** (`SKILL.md`) | Chefs | Each skill holds the template for one screen (brief, policy, credit or desk) and the rules for what changes when you click. It writes the screen as an A2UI description, such as "a card, a slider set to 250k and an Approve button". |
+| **D2E client** (Microsoft SDK) | Phone line | Lets the backend talk directly to the agent and keeps the same conversation open for every turn. |
+| **Node backend** | Inspector | Signs you in. Keeps your token and conversation ID hidden on the server. Checks every screen the agent sends, and forwards a click only if that button was on the screen you saw. |
+| **A2UI renderer** (official) | Waiter | Turns the approved description into real buttons, tabs, sliders and pop-ups. It handles slider moves and pop-ups locally, without asking the agent. |
+| **React shell** | Dining room | Provides the chat page, sign-in, loading states and the *Under the hood* panel. It doesn't design any scenario screen itself. |
+| **Entra ID** | ID check | Proves who you are, so the agent runs on your behalf. |
+
+Before you see a screen, the backend checks that:
+
+- it uses only the components allowed for that scenario;
+- its buttons follow the action-name rules;
+- it contains no scripts, HTML or links;
+- it stays within the size limits;
+- the official A2UI checker accepts it.
+
+### One click, step by step (credit case)
+
+1. You type *"Open the credit limit request for Northwind"*.
+2. The backend wraps that in a small JSON message and sends it to the agent.
+3. The receptionist picks the `credit-case-a2ui` skill. The skill returns the case-file screen as A2UI JSON.
+4. The inspector checks the screen. If the check fails, the backend asks the agent to fix it **once**. If it fails again, you see an error, never a made-up screen.
+5. The waiter draws the screen.
+6. You move the slider and type a reason. All of this happens in the browser; the agent isn't called.
+7. You click **Confirm**. The inspector checks that the button was really offered, then sends *"credit_decide, 200000, reason"* to the **same** agent conversation.
+8. The skill sends back a receipt screen, and the loop repeats.
+
+### Why split it this way
+
+- **Makers own the screens.** Edit a skill in Copilot Studio and the screen changes, with no app release.
+- **Developers own safety.** The backend decides what is allowed, so the agent can't add anything dangerous.
+- **Nothing touches the real world.** The agent has no tools, and all data is fictional.
+
 ## Architecture
 
 One Node.js process serves the built React app and its API at **`http://localhost:2009`**. Vite builds the client once. The sample runs no second frontend server.
