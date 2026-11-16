@@ -59,6 +59,12 @@ export class CopilotStudioTransport implements AgentTransport {
     if (response.conversationId !== conversationId) {
       throw new D2EProtocolError("D2E response conversation did not match the request.");
     }
+    if ((process.env.LOG_LEVEL ?? "INFO").toUpperCase() === "DEBUG") {
+      const names = response.activities
+        .filter((activity) => activity.type === ActivityTypes.Event || activity.type === ActivityTypes.Trace)
+        .map((activity) => `${activity.type}:${activity.name ?? activity.valueType ?? "unnamed"}`);
+      console.log(`${new Date().toISOString()} | DEBUG | ${JSON.stringify({ event: "d2e_activity_names", names })}`);
+    }
     return extractSingleTextActivity(response.activities);
   }
 }

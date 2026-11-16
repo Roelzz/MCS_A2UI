@@ -1,0 +1,5 @@
+mcs.metadata:
+  componentName: policy-request-a2ui
+  description: Use when the user asks whether they may work from another country or city, work abroad, or about a remote-work or travel policy (e.g. "can I work from Lisbon for six weeks?"), or when a JSON envelope is a ui_action or correction for a surfaceId starting with policy-. Returns an agent-authored A2UI v0.9 answer with eligibility checks and a prefilled request form. Fictional policy; never submits anything.
+  schemaName: rrs_mcs_a2ui_qHqHEj.skill.policy-request-a2ui_Pr3kL8
+kind: InlineAgentSkill

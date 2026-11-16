@@ -1,0 +1,5 @@
+mcs.metadata:
+  componentName: credit-case-a2ui
+  description: Use when the user asks to review, open or decide a credit limit increase or credit case for a customer (e.g. "open the credit case for Northwind", "sales wants a higher credit limit"), or when a JSON envelope is a ui_action or correction for a surfaceId starting with credit-. Returns an agent-authored A2UI v0.9 case file with tabs, a limit slider and human decision controls. Fictional data; never changes a credit system.
+  schemaName: rrs_mcs_a2ui_qHqHEj.skill.credit-case-a2ui_Cr9vT2
+kind: InlineAgentSkill

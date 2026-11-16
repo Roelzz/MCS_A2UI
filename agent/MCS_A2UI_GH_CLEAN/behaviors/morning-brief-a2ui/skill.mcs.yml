@@ -1,0 +1,5 @@
+mcs.metadata:
+  componentName: morning-brief-a2ui
+  description: Use when the user asks what needs their attention today, for a morning or executive brief, their priorities, inbox or decisions to make (e.g. "what needs me today?"), or when a JSON envelope is a ui_action or correction for a surfaceId starting with brief-. Returns the agent-authored A2UI v0.9 morning brief with Approve, Delegate and Snooze. Fictional demo data; never use for other topics or for real approvals.
+  schemaName: rrs_mcs_a2ui_qHqHEj.skill.morning-brief-a2ui_Mb7rQ4
+kind: InlineAgentSkill

@@ -1,0 +1,5 @@
+mcs.metadata:
+  componentName: desk-setup-a2ui
+  description: Use when the user asks for a laptop, monitor, headset or other desk or equipment upgrade (e.g. "I need a laptop for local development"), or when a JSON envelope is a ui_action or correction for a surfaceId starting with desk-. Returns an agent-authored A2UI v0.9 desk setup form and a receipt. Demo only; never buys, provisions or submits anything.
+  schemaName: rrs_mcs_a2ui_qHqHEj.skill.desk-setup-a2ui_Dk7sQ2
+kind: InlineAgentSkill

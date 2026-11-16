@@ -1,420 +1,340 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { A2uiSurface, type ReactCatalogComponent } from "@a2ui/react/v0_9";
-import {
-  MessageProcessor,
-  type A2uiMessage,
-  type ActionPayload,
-} from "@a2ui/web_core/v0_9";
+import { MessageProcessor, type A2uiMessage, type ActionPayload } from "@a2ui/web_core/v0_9";
 import { basicCatalog, injectBasicCatalogStyles } from "@a2ui/web_core/v0_9/basic_catalog";
+import "@fontsource/material-icons/400.css";
 import "./styles.css";
 
 type Status = {
   authenticated: boolean;
   authError: string | null;
   agentReady: boolean;
-  workflow: { phase: string; requestId: string | null };
+  conversation: { started: boolean; status: string };
   runtime: "in-memory";
 };
 
-type ApiFailure = {
-  code: string;
-  message: string;
-  retryable: boolean;
-  fieldErrors?: Record<string, string>;
+type ApiFailure = { code: string; message: string; retryable: boolean; fieldErrors?: Record<string, string> };
+
+type Diagnostics = {
+  turnId: string;
+  request: Record<string, unknown>;
+  responseType: "ui" | "text" | "error";
+  responseBytes: number;
+  latencyMs: number;
+  correctionUsed: boolean;
+  selfReportedSkill?: string;
+  surfaceId?: string;
+  revision?: number;
+  componentCount?: number;
+  serverActions?: string[];
 };
 
-type Diagnostic = {
-  label: string;
-  requestId?: string;
-  submissionId?: string;
-  detail?: string;
+type Entry =
+  | { kind: "user"; text: string; at: number }
+  | { kind: "action"; surfaceId: string; name: string; summary: string; at: number }
+  | { kind: "agent_text"; text: string; turnId: string; error: boolean; diagnostics: Diagnostics; at: number }
+  | {
+      kind: "agent_ui";
+      text: string;
+      turnId: string;
+      scenario: string;
+      skill: string;
+      surfaceId: string;
+      revision: number;
+      messages: A2uiMessage[];
+      diagnostics: Diagnostics;
+      at: number;
+    }
+  | { kind: "notice"; level: "error" | "warning"; code: string; text: string; at: number };
+
+type Conversation = {
+  started: boolean;
+  status: string;
+  transcript: Entry[];
+  surfaces: Record<string, { scenario: string; revision: number }>;
 };
 
-type FormResponse = {
-  form: { requestId: string };
-  surfaceMessages: A2uiMessage[];
-  diagnostics: { requestId: string; protocol: string; messageCount: number };
+const SCENARIO_LABEL: Record<string, string> = {
+  brief: "Morning brief",
+  policy: "Policy → request",
+  credit: "Credit case file",
+  desk: "Desk setup",
 };
-
-type SubmitResponse = {
-  ack: {
-    device: string;
-    justification: string;
-    message: string;
-  };
-  duplicate: boolean;
-  diagnostics: { requestId: string; submissionId: string; duplicate: boolean };
-};
-
-const DEMO_DISCLAIMER = "Demo request received — nothing was purchased or submitted.";
 
 function App() {
   const [processor] = useState(() => new MessageProcessor<ReactCatalogComponent>([basicCatalog]));
-  const [surfaces, setSurfaces] = useState(() => Array.from(processor.model.surfacesMap.values()));
   const [status, setStatus] = useState<Status | null>(null);
-  const [userText, setUserText] = useState("");
+  const [transcript, setTranscript] = useState<Entry[]>([]);
+  const [revisions, setRevisions] = useState<Record<string, number>>({});
+  const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [initializing, setInitializing] = useState(true);
   const [error, setError] = useState<ApiFailure | null>(null);
-  const [ack, setAck] = useState<SubmitResponse["ack"] | null>(null);
-  const [signInUrl, setSignInUrl] = useState<string | null>(null);
-  const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
-  const requestIdRef = useRef<string | null>(null);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const busyRef = useRef(false);
+  const revisionsRef = useRef<Record<string, number>>({});
+  const renderedTurnRef = useRef<Record<string, string>>({});
+  const endRef = useRef<HTMLDivElement>(null);
+  const lastAgentRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
-  const refreshStatus = useCallback(async () => {
-    const response = await fetch("/api/status", { cache: "no-store" });
-    if (!response.ok) throw new Error("Status could not be loaded.");
-    setStatus((await response.json()) as Status);
-  }, []);
+  // Each agent UI turn is a self-contained surface; replace any earlier version of the same surface.
+  const renderSurfaces = useCallback((entries: Entry[]) => {
+    for (const entry of entries) {
+      if (entry.kind !== "agent_ui") continue;
+      if (renderedTurnRef.current[entry.surfaceId] === entry.turnId) continue;
+      if (processor.getSurface(entry.surfaceId)) {
+        processor.processMessages([{ version: "v0.9", deleteSurface: { surfaceId: entry.surfaceId } }]);
+      }
+      processor.processMessages(entry.messages);
+      renderedTurnRef.current[entry.surfaceId] = entry.turnId;
+    }
+  }, [processor]);
+
+  const applyConversation = useCallback((conversation: Conversation) => {
+    renderSurfaces(conversation.transcript);
+    const nextRevisions = Object.fromEntries(Object.entries(conversation.surfaces).map(([id, surface]) => [id, surface.revision]));
+    revisionsRef.current = nextRevisions;
+    setRevisions(nextRevisions);
+    setTranscript(conversation.transcript);
+  }, [renderSurfaces]);
+
+  const runBusy = useCallback(async (work: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      await work();
+    } catch (caught) {
+      setError(toApiFailure(caught));
+      try {
+        setStatus(await getJson<Status>("/api/status"));
+        applyConversation(await getJson<Conversation>("/api/conversation"));
+      } catch { /* status refresh is best effort after a failed turn */ }
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, [applyConversation]);
+
+  const startConversation = useCallback(async () => {
+    await runBusy(async () => {
+      applyConversation(await postJson<Conversation>("/api/conversation/start", {}));
+    });
+  }, [applyConversation, runBusy]);
 
   useEffect(() => {
     injectBasicCatalogStyles();
-    const sync = () => setSurfaces(Array.from(processor.model.surfacesMap.values()));
-    const created = processor.onSurfaceCreated(sync);
-    const deleted = processor.onSurfaceDeleted(sync);
-    void refreshStatus().catch(() => {
-      setError({ code: "APP_UNAVAILABLE", message: "The local demo server is unavailable.", retryable: true });
-    });
-    return () => {
-      created.unsubscribe();
-      deleted.unsubscribe();
-      processor.dispose();
-    };
-  }, [processor, refreshStatus]);
-
-  useEffect(() => {
-    if (!signInUrl || status?.authenticated) return;
-    const timer = window.setInterval(() => {
-      void refreshStatus().catch(() => undefined);
-    }, 2500);
-    return () => window.clearInterval(timer);
-  }, [refreshStatus, signInUrl, status?.authenticated]);
-
-  useEffect(() => {
-    if (status?.authError) setSignInUrl(null);
-  }, [status?.authError]);
-
-  const submitForm = useCallback(
-    async (context: Record<string, unknown>) => {
-      if (busyRef.current || !requestIdRef.current) return;
-      busyRef.current = true;
-      setBusy(true);
-      setError(null);
-      setAck(null);
-      const deviceSelection = context.deviceSelection;
-      const device = Array.isArray(deviceSelection) ? deviceSelection[0] : deviceSelection;
-      const justification = context.justification;
+    void (async () => {
       try {
-        const result = await postJson<SubmitResponse>("/api/equipment/submit", {
-          requestId: requestIdRef.current,
-          device,
-          justification,
-        });
-        setAck(result.ack);
-        setDiagnostics((current) => [
-          ...current,
-          {
-            label: result.duplicate ? "Duplicate submit suppressed" : "Agent acknowledgment validated",
-            requestId: result.diagnostics.requestId,
-            submissionId: result.diagnostics.submissionId,
-          },
-        ]);
-        if (result.duplicate) {
-          setError({
-            code: "DUPLICATE_SUPPRESSED",
-            message: "This submission was already received; no additional agent turn was sent.",
-            retryable: false,
-          });
+        const current = await getJson<Status>("/api/status");
+        setStatus(current);
+        const conversation = await getJson<Conversation>("/api/conversation");
+        applyConversation(conversation);
+        setInitializing(false);
+        if (current.authenticated && current.agentReady && !conversation.started) {
+          await startConversation();
         }
-        await refreshStatus();
       } catch (caught) {
         setError(toApiFailure(caught));
-        if (caught instanceof ApiRequestError && caught.failure.code === "UPSTREAM_TIMEOUT") {
-          setDiagnostics((current) => [
-            ...current,
-              {
-                label: "Submission outcome uncertain; retry disabled",
-                ...(requestIdRef.current ? { requestId: requestIdRef.current } : {}),
-              },
-          ]);
-        }
-        await refreshStatus().catch(() => undefined);
-      } finally {
-        busyRef.current = false;
-        setBusy(false);
+        setInitializing(false);
       }
-    },
-    [refreshStatus],
-  );
+    })();
+    return () => processor.dispose();
+  }, [applyConversation, processor, startConversation]);
 
   useEffect(() => {
     const subscription = processor.model.onAction.subscribe((action: ActionPayload) => {
-      if (action.surfaceId !== "equipment-request" || action.name !== "equipment_submit") {
-        setError({
-          code: "UNSUPPORTED_ACTION",
-          message: "The A2UI surface emitted an unsupported action.",
-          retryable: false,
-        });
+      // open_* buttons only open a Modal in the renderer; they never reach the agent.
+      if (action.name.startsWith("open_")) return;
+      const revision = revisionsRef.current[action.surfaceId];
+      if (!revision) {
+        setError({ code: "UNKNOWN_SURFACE", message: "This surface is no longer active.", retryable: false });
         return;
       }
-      void submitForm(action.context);
+      void runBusy(async () => {
+        const result = await postJson<Conversation>("/api/action", {
+          actionId: crypto.randomUUID(),
+          surfaceId: action.surfaceId,
+          revision,
+          name: action.name,
+          context: action.context ?? {},
+        });
+        applyConversation(result);
+      });
     });
     return () => subscription.unsubscribe();
-  }, [processor, submitForm]);
+  }, [applyConversation, processor, runBusy]);
 
-  async function createForm(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError(null);
-    setAck(null);
-    setSignInUrl(null);
-    requestIdRef.current = null;
-    if (!userText.trim()) {
-      setError({
-        code: "INVALID_REQUEST",
-        message: "Describe the equipment you need.",
-        retryable: false,
-        fieldErrors: { userText: "This field is required." },
-      });
-      return;
+  useEffect(() => {
+    const last = transcript[transcript.length - 1];
+    if (!busy && last && (last.kind === "agent_ui" || last.kind === "agent_text")) {
+      // Surfaces finish layout after custom elements upgrade, so wait a frame before aligning the new turn's top.
+      const timer = window.setTimeout(() => lastAgentRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 150);
+      return () => window.clearTimeout(timer);
     }
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [transcript, busy]);
 
-    setBusy(true);
+  async function send(event?: React.FormEvent) {
+    event?.preventDefault();
+    const text = draft.trim();
+    if (!text) return;
+    await runBusy(async () => {
+      setDraft("");
+      const result = await postJson<Conversation>("/api/chat", { text });
+      applyConversation(result);
+    });
+    composerRef.current?.focus();
+  }
+
+  async function restart() {
+    await runBusy(async () => {
+      await postJson("/api/reset", {});
+      for (const surfaceId of Object.keys(renderedTurnRef.current)) {
+        if (processor.getSurface(surfaceId)) {
+          processor.processMessages([{ version: "v0.9", deleteSurface: { surfaceId } }]);
+        }
+      }
+      renderedTurnRef.current = {};
+      applyConversation({ started: false, status: "idle", transcript: [], surfaces: {} });
+      applyConversation(await postJson<Conversation>("/api/conversation/start", {}));
+    });
+  }
+
+  async function signIn() {
+    if (busyRef.current) return;
     busyRef.current = true;
+    setBusy(true);
+    setError(null);
     try {
-      const result = await postJson<FormResponse>("/api/equipment/request", { userText });
-      requestIdRef.current = result.form.requestId;
-      processor.processMessages(result.surfaceMessages);
-      setDiagnostics((current) => [
-        ...current,
-        {
-          label: `Validated ${result.surfaceMessages.length} A2UI ${result.diagnostics.protocol} messages`,
-          requestId: result.diagnostics.requestId,
-        },
-      ]);
-      await refreshStatus();
+      const result = await postJson<{ url: string }>("/api/auth-url", {});
+      window.location.assign(result.url);
     } catch (caught) {
       setError(toApiFailure(caught));
-      await refreshStatus().catch(() => undefined);
-    } finally {
       busyRef.current = false;
       setBusy(false);
     }
   }
 
-  async function requestSignInLink() {
-    setError(null);
-    try {
-      const response = await postJson<{ url: string }>("/api/auth-url", {});
-      setSignInUrl(response.url);
-    } catch (caught) {
-      setError(toApiFailure(caught));
-    }
-  }
-
-  const locked = busy || Boolean(ack) || status?.workflow.phase === "uncertain";
+  const ready = Boolean(status?.authenticated && status.agentReady);
+  const latestTurn = latestTurnBySurface(transcript);
+  const agentTurns = transcript.filter((entry): entry is Extract<Entry, { kind: "agent_text" | "agent_ui" }> => entry.kind === "agent_text" || entry.kind === "agent_ui");
 
   return (
-    <main className="page-shell">
+    <div className="app-shell">
       <header className="topbar">
-        <div className="brand-mark" aria-hidden="true">A</div>
-        <div>
-          <p className="eyebrow">A2UI × Copilot Studio</p>
-          <h1>Equipment request demo</h1>
-        </div>
-        <div className="status-pill" data-ready={status?.agentReady ? "true" : "false"}>
-          <span className="status-dot" />
-          {status?.agentReady ? "Agent connection enabled" : "Agent connection gated"}
+        <div className="brand"><span className="brand-mark" aria-hidden="true">A2</span><div><strong>Agent-built UI</strong><small>Copilot Studio skills · official A2UI renderer</small></div></div>
+        <div className="topbar-actions">
+          <span className="demo-badge"><span aria-hidden="true">●</span> Fictional data · no real-world changes</span>
+          <button className="button button-ghost" type="button" onClick={() => setDiagnosticsOpen((open) => !open)} aria-expanded={diagnosticsOpen} aria-controls="diagnostics">Under the hood</button>
+          {ready && <button className="button button-ghost" type="button" disabled={busy} onClick={() => void restart()}>Restart</button>}
         </div>
       </header>
 
-      <section className="intro-card">
-        <div className="intro-copy">
-          <p className="eyebrow">Direct-to-Engine · delegated sign-in</p>
-          <h2>Turn a request into an editable, agent-grounded form.</h2>
-          <p>
-            Copilot Studio interprets your request. Its structured response is validated by the
-            backend, then rendered as a native A2UI surface. This demo never buys or submits equipment.
-          </p>
-        </div>
-        <div className="auth-panel">
-          <div className={`auth-state ${status?.authenticated ? "is-authenticated" : ""}`}>
-            <span className="state-icon">{status?.authenticated ? "✓" : "•"}</span>
-            <div>
-              <strong>{status?.authenticated ? "Signed in" : "Delegated sign-in"}</strong>
-              <small>{status?.authenticated ? "Token held in server memory" : "No browser token storage"}</small>
-            </div>
-          </div>
-          {!status?.authenticated && (
-            <button
-              className="button button-secondary"
-              onClick={requestSignInLink}
-              disabled={!status}
-              type="button"
-            >
-              Get sign-in link
-            </button>
-          )}
-          {signInUrl && (
-            <a className="sign-in-link" href={signInUrl} target="_blank" rel="noreferrer">
-              Open Microsoft sign-in in your browser
-            </a>
-          )}
-          {status?.authError === "CONSENT_REQUIRED" && (
-            <p className="inline-notice" role="status">
-              An administrator must grant delegated CopilotStudio.Copilots.Invoke consent for this app.
-            </p>
-          )}
-          {status?.authError && status.authError !== "CONSENT_REQUIRED" && (
-            <p className="inline-notice" role="status">Sign-in did not complete. Request a new sign-in link.</p>
-          )}
-        </div>
-      </section>
+      <div className={diagnosticsOpen ? "layout with-drawer" : "layout"}>
+        <main className="chat" aria-busy={busy}>
+          <div className="transcript" role="log" aria-live="polite">
+            {initializing && <p className="system-note">Opening your workspace…</p>}
 
-      {!status?.agentReady && (
-        <div className="callout callout-warning" role="status">
-          <strong>Live agent calls are disabled.</strong> The local agent configuration has not passed
-          Copilot Studio validation and publication yet. No request is sent to the current cloud agent.
-        </div>
-      )}
-
-      <section className="workspace-grid">
-        <div className="work-panel">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">01 / Describe</p>
-              <h2>What do you need?</h2>
-            </div>
-            <span className="step-badge">Prompt</span>
-          </div>
-          <form onSubmit={createForm}>
-            <label htmlFor="request-text">Request description</label>
-            <textarea
-              id="request-text"
-              value={userText}
-              onChange={(event) => setUserText(event.target.value)}
-              placeholder="I need a laptop for running local development tools."
-              maxLength={1000}
-              rows={4}
-              disabled={locked || status?.workflow.phase !== "new"}
-            />
-            <div className="form-footer">
-              <span>{userText.length}/1000 characters</span>
-              <button
-                className="button button-primary"
-                type="submit"
-                disabled={locked || status?.workflow.phase !== "new" || !status?.authenticated || !status?.agentReady}
-              >
-                {busy && !requestIdRef.current ? "Asking Copilot Studio…" : "Create request form"}
-                <span aria-hidden="true">→</span>
-              </button>
-            </div>
-          </form>
-
-          <div className="section-heading form-heading">
-            <div>
-              <p className="eyebrow">02 / Review and submit</p>
-              <h2>Agent-generated A2UI form</h2>
-            </div>
-            {surfaces.length > 0 && <span className="step-badge step-badge-active">A2UI v0.9</span>}
-          </div>
-          <div className={`a2ui-shell ${locked ? "is-locked" : ""}`} aria-busy={busy}>
-            {surfaces.length > 0 ? (
-              surfaces.map((surface) => <A2uiSurface key={surface.id} surface={surface} />)
-            ) : (
-              <div className="empty-surface">
-                <div className="empty-icon" aria-hidden="true">▤</div>
-                <strong>Your form will appear here</strong>
-                <p>The equipment selector and justification are rendered from the validated A2UI message stream.</p>
-              </div>
+            {!initializing && !status?.authenticated && (
+              <section className="sign-in-card">
+                <span className="brand-mark large" aria-hidden="true">A2</span>
+                <h1>The agent builds the interface.</h1>
+                <p>Every card, form, slider and button in this chat is authored by a Copilot Studio skill as A2UI JSON and drawn by the official renderer. This page only validates and renders it.</p>
+                <button className="button button-primary" type="button" disabled={busy} onClick={() => void signIn()}>Sign in with Microsoft</button>
+                {status?.authError && <p className="auth-error" role="alert">{status.authError === "CONSENT_REQUIRED" ? "An Entra administrator must grant delegated CopilotStudio.Copilots.Invoke consent." : "Sign-in did not finish. Try again in this browser."}</p>}
+              </section>
             )}
-            {busy && requestIdRef.current && <div className="surface-overlay">Sending to Copilot Studio…</div>}
-            {ack && <div className="surface-overlay surface-overlay-done">Request received</div>}
-          </div>
-          {error && (
-            <div className="callout callout-error" role="alert">
-              <strong>{error.code.replaceAll("_", " ")}</strong>
-              <p>{error.message}</p>
-              {error.fieldErrors && (
-                <ul>
-                  {Object.entries(error.fieldErrors).map(([field, message]) => (
-                    <li key={field}><b>{field}:</b> {message}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-          {ack && (
-            <div className="ack-card" role="status">
-              <div className="ack-icon" aria-hidden="true">✓</div>
-              <div>
-                <strong>Agent acknowledgment</strong>
-                <p>{ack.message}</p>
-                <small>Echoed: {ack.device} · {ack.justification}</small>
-              </div>
-            </div>
-          )}
-        </div>
+            {status?.authenticated && !status.agentReady && <p className="system-note warning">Agent calls are gated until the published configuration is verified (MCS_AGENT_READY).</p>}
 
-        <aside className="details-panel">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">03 / Observe</p>
-              <h2>Demo diagnostics</h2>
-            </div>
-            <span className="live-indicator"><i /> Local</span>
-          </div>
-          <p className="panel-description">
-            Safe correlation details only. Tokens, conversation IDs, and request text are never shown here.
-          </p>
-          <div className="diagnostic-list">
-            <DiagnosticRow label="Runtime" value="In-memory session" />
-            <DiagnosticRow label="Workflow" value={status?.workflow.phase ?? "Loading…"} />
-            <DiagnosticRow label="D2E transport" value="Microsoft Agents SDK" />
-            <DiagnosticRow label="Renderer" value="@a2ui/react · v0.9" />
-          </div>
-          <div className="event-log" aria-live="polite">
-            <div className="event-log-heading">
-              <span>Contract events</span>
-              <span>{diagnostics.length.toString().padStart(2, "0")}</span>
-            </div>
-            {diagnostics.length === 0 ? (
-              <p className="empty-log">No contract events yet.</p>
-            ) : (
-              diagnostics.slice(-5).reverse().map((entry, index) => (
-                <div className="event-item" key={`${entry.label}-${index}`}>
-                  <span className="event-check">✓</span>
-                  <div>
-                    <strong>{entry.label}</strong>
-                    {entry.requestId && <small>Request {entry.requestId.slice(0, 8)}</small>}
-                    {entry.submissionId && <small>Submission {entry.submissionId.slice(0, 8)}</small>}
+            {transcript.map((entry, index) => {
+              const key = `${entry.kind}-${entry.at}-${index}`;
+              const lastRef = index === transcript.length - 1 ? lastAgentRef : undefined;
+              if (entry.kind === "user") return <div key={key} className="bubble-row user"><div className="bubble user">{entry.text}</div></div>;
+              if (entry.kind === "action") return <div key={key} className="action-chip"><span aria-hidden="true">↳</span> You clicked <code>{entry.summary}</code> — sent to the same agent conversation</div>;
+              if (entry.kind === "notice") return <div key={key} className={`notice ${entry.level}`} role="alert"><strong>{entry.code.replaceAll("_", " ")}</strong> {entry.text}</div>;
+              if (entry.kind === "agent_text") return <div key={key} ref={lastRef} className="bubble-row agent"><span className="avatar" aria-hidden="true">✦</span><div className={entry.error ? "bubble agent error" : "bubble agent"}>{entry.text}</div></div>;
+              const live = latestTurn[entry.surfaceId] === entry.turnId;
+              const surface = live ? processor.getSurface(entry.surfaceId) : undefined;
+              return (
+                <div key={key} ref={lastRef} className="bubble-row agent">
+                  <span className="avatar" aria-hidden="true">✦</span>
+                  <div className="agent-ui">
+                    <div className="ui-meta"><span className="scenario-tag" data-scenario={entry.scenario}>{SCENARIO_LABEL[entry.scenario] ?? entry.scenario}</span><span>skill (self-reported): <code>{entry.skill}</code></span><span>rev {entry.revision}</span></div>
+                    {entry.text && <p className="ui-text">{entry.text}</p>}
+                    {surface ? (
+                      <div className="surface-frame" inert={busy || revisions[entry.surfaceId] !== entry.revision}><A2uiSurface surface={surface} /></div>
+                    ) : (
+                      <div className="surface-frame superseded">Earlier version of this surface — the agent updated it below.</div>
+                    )}
                   </div>
                 </div>
-              ))
-            )}
-          </div>
-          <div className="safety-note">
-            <span aria-hidden="true">◎</span>
-            <p><strong>Demo-safe by design</strong><br />No tickets, inventory, approvals, or purchases are created.</p>
-          </div>
-        </aside>
-      </section>
+              );
+            })}
 
-      <footer className="page-footer">
-        <span>Local POC · one origin · localhost:2009</span>
-        <span>Copilot Studio Direct-to-Engine + A2UI</span>
-      </footer>
-    </main>
+            {busy && !initializing && <div className="bubble-row agent"><span className="avatar" aria-hidden="true">✦</span><div className="bubble agent typing" role="status"><span /><span /><span /> <em>The agent is composing{transcript.length === 0 ? " its welcome" : ""}…</em></div></div>}
+            {error && <div className="notice error" role="alert"><strong>{error.code.replaceAll("_", " ")}</strong> {error.message}</div>}
+            {ready && !status?.conversation.started && transcript.length === 0 && !busy && <button className="button button-primary" type="button" onClick={() => void startConversation()}>Start conversation</button>}
+            <div ref={endRef} />
+          </div>
+
+          <form className="composer" onSubmit={(event) => void send(event)}>
+            <textarea
+              ref={composerRef}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }}
+              maxLength={1000}
+              rows={1}
+              placeholder={ready ? "Ask the agent… e.g. “What needs me today?”" : "Sign in to chat with the agent"}
+              disabled={!ready || busy || initializing}
+              aria-label="Message the agent"
+            />
+            <button className="button button-primary" type="submit" disabled={!ready || busy || !draft.trim()}>Send</button>
+          </form>
+        </main>
+
+        {diagnosticsOpen && (
+          <aside id="diagnostics" className="drawer" aria-label="Diagnostics">
+            <h2>Under the hood</h2>
+            <p>Agent output is one v2 JSON envelope per turn. The backend validates it (strict JSON, turnId echo, Basic Catalog allowlists, official MessageProcessor dry run) and never generates UI. Tokens and the conversation ID stay on the server.</p>
+            {agentTurns.length === 0 && <p className="system-note">No agent turns yet.</p>}
+            {[...agentTurns].reverse().map((entry) => {
+              const d = entry.diagnostics;
+              return (
+                <details key={d.turnId} className="turn-card">
+                  <summary><span className={`dot ${d.responseType}`} />{d.responseType === "ui" ? `${d.surfaceId} · rev ${d.revision}` : d.responseType} <small>{d.latencyMs} ms</small></summary>
+                  <dl>
+                    <div><dt>turnId</dt><dd>{d.turnId.slice(0, 8)}</dd></div>
+                    <div><dt>request</dt><dd>{String(d.request.type)}</dd></div>
+                    {d.selfReportedSkill && <div><dt>skill (self-reported)</dt><dd>{d.selfReportedSkill}</dd></div>}
+                    {d.componentCount !== undefined && <div><dt>components</dt><dd>{d.componentCount}</dd></div>}
+                    {d.serverActions && <div><dt>declared actions</dt><dd>{d.serverActions.join(", ") || "none"}</dd></div>}
+                    <div><dt>bytes</dt><dd>{d.responseBytes}</dd></div>
+                    <div><dt>correction used</dt><dd>{d.correctionUsed ? "yes" : "no"}</dd></div>
+                  </dl>
+                  <p className="drawer-label">Request envelope</p>
+                  <pre>{JSON.stringify(d.request, null, 2)}</pre>
+                  {entry.kind === "agent_ui" && (<><p className="drawer-label">A2UI messages from the agent</p><pre>{JSON.stringify(entry.messages, null, 2)}</pre></>)}
+                </details>
+              );
+            })}
+          </aside>
+        )}
+      </div>
+    </div>
   );
 }
 
-function DiagnosticRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="diagnostic-row">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
+function latestTurnBySurface(transcript: Entry[]): Record<string, string> {
+  const latest: Record<string, string> = {};
+  for (const entry of transcript) {
+    if (entry.kind === "agent_ui") latest[entry.surfaceId] = entry.turnId;
+  }
+  return latest;
 }
 
 class ApiRequestError extends Error {
@@ -423,30 +343,31 @@ class ApiRequestError extends Error {
   }
 }
 
-async function postJson<T extends object>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    body: JSON.stringify(body),
-  });
-  const result = (await response.json()) as T | { error: ApiFailure };
-  if (!response.ok && "error" in result) {
-    throw new ApiRequestError(result.error);
-  }
+async function readResponse<T>(response: Response): Promise<T> {
+  const result = await response.json() as T | { error: ApiFailure };
   if (!response.ok) {
-    throw new Error("The request could not be completed.");
+    if (typeof result === "object" && result !== null && "error" in result) throw new ApiRequestError(result.error);
+    throw new Error("The local application could not complete this request.");
   }
   return result as T;
 }
 
+async function getJson<T>(path: string): Promise<T> {
+  return readResponse<T>(await fetch(path, { cache: "no-store", credentials: "same-origin" }));
+}
+
+async function postJson<T = object>(path: string, body: unknown): Promise<T> {
+  return readResponse<T>(await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify(body),
+  }));
+}
+
 function toApiFailure(error: unknown): ApiFailure {
   if (error instanceof ApiRequestError) return error.failure;
-  return {
-    code: "REQUEST_FAILED",
-    message: error instanceof Error ? error.message : "The request could not be completed.",
-    retryable: false,
-  };
+  return { code: "REQUEST_FAILED", message: error instanceof Error ? error.message : "The request could not be completed.", retryable: false };
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
